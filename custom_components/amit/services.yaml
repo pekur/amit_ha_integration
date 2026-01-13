@@ -1,0 +1,31 @@
+write_variable:
+  name: Write Variable
+  description: Write a value to an AMiT PLC variable.
+  fields:
+    wid:
+      name: WID
+      description: Variable WID (ID number)
+      example: 4813
+      selector:
+        number:
+          min: 4000
+          max: 6000
+          mode: box
+    name:
+      name: Variable Name
+      description: Variable name (alternative to WID)
+      example: "Teoko1"
+      selector:
+        text:
+    value:
+      name: Value
+      description: Value to write
+      required: true
+      example: 22.5
+      selector:
+        number:
+          mode: box
+
+reload_variables:
+  name: Reload Variables
+  description: Reload variable list from PLC.

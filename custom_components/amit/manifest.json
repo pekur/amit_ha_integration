@@ -1,0 +1,12 @@
+{
+  "domain": "amit",
+  "name": "AMiT PLC",
+  "codeowners": ["@your-github-username"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/your-username/ha-amit",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/your-username/ha-amit/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

@@ -1,0 +1,44 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AMiT PLC Connection",
+        "description": "Enter connection details for your AMiT PLC.",
+        "data": {
+          "host": "IP Address",
+          "port": "Port",
+          "station_addr": "Station Address",
+          "client_addr": "Client Address",
+          "password": "Password",
+          "scan_interval": "Scan Interval (seconds)"
+        }
+      },
+      "variables": {
+        "title": "Select Variables",
+        "description": "Found {variable_count} readable variables. Select which ones to monitor.",
+        "data": {
+          "selected_variables": "Variables to monitor"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to PLC. Check IP address and network.",
+      "unknown": "Unknown error occurred."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "AMiT Options",
+        "description": "Found {variable_count} variables. Change selection and scan interval.",
+        "data": {
+          "selected_variables": "Variables to monitor",
+          "scan_interval": "Scan Interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to PLC to load variable list."
+    }
+  }
+}
