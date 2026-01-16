@@ -1,12 +1,12 @@
 {
   "domain": "amit",
   "name": "AMiT PLC",
-  "codeowners": ["@your-github-username"],
+  "codeowners": ["@pekur"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/your-username/ha-amit",
+  "documentation": "https://github.com/pekur/amit_ha_integration",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/your-username/ha-amit/issues",
-  "requirements": ["aiofiles>=23.0.0"],
-  "version": "0.1.0"
+  "issue_tracker": "https://github.com/pekur/amit_ha_integration/issues",
+  "requirements": [],
+  "version": "1.0.0"
 }

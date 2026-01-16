@@ -1,0 +1,71 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Připojení k AMiT PLC",
+        "description": "Zadejte údaje pro připojení k vašemu AMiT PLC.",
+        "data": {
+          "host": "IP adresa",
+          "port": "Port",
+          "station_addr": "Adresa stanice",
+          "client_addr": "Adresa klienta",
+          "password": "Heslo",
+          "scan_interval": "Interval aktualizace (sekundy)"
+        }
+      },
+      "select_variables": {
+        "title": "Výběr proměnných",
+        "description": "Nalezeno {count} čitelných proměnných. Vyberte které chcete sledovat.",
+        "data": {
+          "variables": "Proměnné ke sledování"
+        }
+      },
+      "select_writable": {
+        "title": "Zapisovatelné proměnné",
+        "description": "Vyberte které proměnné chcete ovládat (zapisovat hodnoty).",
+        "data": {
+          "writable_variables": "Zapisovatelné proměnné"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nepodařilo se připojit k PLC. Zkontrolujte IP adresu a port.",
+      "unknown": "Nastala neznámá chyba."
+    },
+    "abort": {
+      "already_configured": "Toto PLC je již nakonfigurováno."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Nastavení AMiT PLC",
+        "description": "Upravte nastavení integrace.",
+        "data": {
+          "scan_interval": "Interval aktualizace (sekundy)"
+        }
+      },
+      "select_variables": {
+        "title": "Výběr proměnných",
+        "description": "Vyberte proměnné ke sledování.",
+        "data": {
+          "variables": "Proměnné ke sledování"
+        }
+      },
+      "select_writable": {
+        "title": "Zapisovatelné proměnné",
+        "description": "Vyberte které proměnné chcete ovládat.",
+        "data": {
+          "writable_variables": "Zapisovatelné proměnné"
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "reload_variables": {
+        "name": "Znovu načíst proměnné"
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 {
   "name": "AMiT PLC Integration",
   "render_readme": true,
-  "domains": ["sensor", "number", "binary_sensor", "switch"],
+  "domains": ["sensor", "number", "binary_sensor", "switch", "button"],
   "iot_class": "local_polling",
   "homeassistant": "2024.1.0"
 }
