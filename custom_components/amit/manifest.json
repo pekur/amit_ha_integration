@@ -7,6 +7,6 @@
   "documentation": "https://github.com/pekur/amit_ha_integration",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/pekur/amit_ha_integration/issues",
-  "requirements": [],
+  "requirements": ["aiofiles>=23.0.0"],
   "version": "1.0.0"
 }

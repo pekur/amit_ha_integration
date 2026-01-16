@@ -13,7 +13,8 @@ Native Home Assistant integration for AMiT PLCs (AMiNi, AC4 series) using the DB
 - 🎚️ **Setpoint controls** - Number entities for adjusting temperature setpoints
 - 🔘 **Switches** - Control on/off boolean variables
 - ⚠️ **Binary sensors** - Monitor alarms and states
-- 🔄 **Buttons** - Trigger actions (reload variables)
+- 💾 **Export/Import** - Backup and restore configuration including custom entity names
+- 🔄 **Reload button** - Reload variables from PLC without restarting
 - 📝 **Service calls** - Write any variable value programmatically
 - ⚙️ **Options flow** - Reconfigure variables without removing the integration
 - 🇨🇿 **Czech language support** - Full localization
@@ -38,10 +39,13 @@ Native Home Assistant integration for AMiT PLCs (AMiNi, AC4 series) using the DB
 
 ## Configuration
 
+### New Configuration
+
 1. Go to **Settings** → **Devices & Services**
 2. Click **+ Add Integration**
 3. Search for **AMiT PLC**
-4. Enter connection details:
+4. Select **New configuration**
+5. Enter connection details:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -52,9 +56,19 @@ Native Home Assistant integration for AMiT PLCs (AMiNi, AC4 series) using the DB
 | Password | 0 | Numeric password (0 = no password) |
 | Scan Interval | 30 | Polling interval in seconds |
 
-5. Select which variables to monitor
-6. Select which variables should be writable (controllable)
-7. Done!
+6. Select which variables to monitor
+7. Select which variables should be writable (controllable)
+8. Done!
+
+### Import from Backup
+
+1. Go to **Settings** → **Devices & Services**
+2. Click **+ Add Integration**
+3. Search for **AMiT PLC**
+4. Select **Import from backup**
+5. Choose a backup file from the list
+6. Confirm/adjust connection settings (password needs to be re-entered)
+7. Done! All variables and custom entity names will be restored.
 
 ## Entity Types
 
@@ -68,6 +82,47 @@ The integration creates entities based on variable naming patterns and user sele
 | `Por*`, `ALARM*`, `Stav*` | Binary Sensor | Alarms and states |
 
 Variables marked as **writable** in configuration will allow control; others are read-only.
+
+## Device Buttons
+
+Each AMiT PLC device has two built-in buttons:
+
+### Export Configuration
+- **Icon:** Download (mdi:download)
+- **Function:** Exports current configuration to a JSON file
+- **Saves to:** `config/www/amit/amit_export_YYYYMMDD_HHMMSS.json`
+- **Includes:** Connection settings, selected variables, writable variables, custom entity names
+- **Output:** Creates a persistent notification with a download link
+
+### Reload Variables
+- **Icon:** Refresh (mdi:refresh)
+- **Function:** Reloads variable list from PLC
+- **Use case:** After PLC program changes, reload to see new/changed variables
+
+## Export/Import (Backup & Restore)
+
+### Creating a Backup
+
+1. Go to the AMiT PLC device in Home Assistant
+2. Press the **Export Configuration** button
+3. A notification will appear with a download link
+4. The backup file is saved to `config/www/amit/`
+
+The export includes:
+- PLC connection settings (host, port, addresses)
+- Scan interval
+- List of monitored variables with their WIDs
+- List of writable variables
+- **Custom entity names** you've set in Home Assistant
+
+### Restoring from Backup
+
+1. Make sure backup files are in `config/www/amit/`
+2. Add a new AMiT PLC integration
+3. Select **Import from backup**
+4. Choose the backup file
+5. Enter password (not stored in backup for security)
+6. All settings including custom entity names will be restored
 
 ## Services
 
@@ -91,7 +146,7 @@ data:
 
 ### `amit.reload_variables`
 
-Reload the variable list from PLC (useful after PLC program changes).
+Reload the variable list from PLC.
 
 ```yaml
 service: amit.reload_variables
@@ -120,7 +175,7 @@ To add/remove monitored variables or change writable settings:
 
 1. Check Home Assistant logs for errors
 2. Verify the scan interval setting
-3. Try the `amit.reload_variables` service
+3. Press the **Reload Variables** button on the device
 4. Check PLC communication in DetStudio
 
 ### Temperature shows as "unknown"
@@ -132,6 +187,12 @@ Temperature value ~146.19°C indicates a disconnected sensor. The integration fi
 - Check if the variable is selected in the integration configuration
 - Verify the variable type matches expected patterns
 - Check Home Assistant logs for entity creation errors
+
+### Import doesn't restore custom names
+
+- Make sure you're using a backup file created after the custom names feature was added
+- Check Home Assistant logs for "Applied X custom entity names" message
+- Verify the WIDs in the backup match the current PLC variables
 
 ## Protocol Details
 
@@ -150,6 +211,32 @@ Tested on:
 - AC4 series PLCs
 
 Should work with any AMiT PLC supporting DB-Net/IP protocol.
+
+## File Structure
+
+```
+config/
+├── custom_components/
+│   └── amit/
+│       ├── __init__.py
+│       ├── config_flow.py
+│       ├── const.py
+│       ├── protocol.py
+│       ├── sensor.py
+│       ├── number.py
+│       ├── switch.py
+│       ├── binary_sensor.py
+│       ├── button.py
+│       ├── manifest.json
+│       ├── services.yaml
+│       ├── strings.json
+│       └── translations/
+│           ├── en.json
+│           └── cs.json
+└── www/
+    └── amit/
+        └── amit_export_*.json  (backup files)
+```
 
 ## Contributing
 

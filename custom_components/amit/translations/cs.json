@@ -2,6 +2,13 @@
   "config": {
     "step": {
       "user": {
+        "title": "Nastavení AMiT PLC",
+        "description": "Vyberte způsob nastavení integrace AMiT PLC.",
+        "data": {
+          "setup_type": "Typ nastavení"
+        }
+      },
+      "connection": {
         "title": "Připojení k AMiT PLC",
         "description": "Zadejte údaje pro připojení k vašemu AMiT PLC.",
         "data": {
@@ -13,56 +20,75 @@
           "scan_interval": "Interval aktualizace (sekundy)"
         }
       },
-      "select_variables": {
-        "title": "Výběr proměnných",
-        "description": "Nalezeno {count} čitelných proměnných. Vyberte které chcete sledovat.",
+      "import_select": {
+        "title": "Import ze zálohy",
+        "description": "Nalezeno {backup_count} záložních souborů. Vyberte který chcete obnovit.",
         "data": {
-          "variables": "Proměnné ke sledování"
+          "backup_file": "Záložní soubor"
         }
       },
-      "select_writable": {
-        "title": "Zapisovatelné proměnné",
-        "description": "Vyberte které proměnné chcete ovládat (zapisovat hodnoty).",
+      "import_confirm": {
+        "title": "Potvrdit import",
+        "description": "Záloha obsahuje {monitored_count} sledovaných a {writable_count} zapisovatelných proměnných. Ověřte nastavení připojení a zadejte heslo.",
         "data": {
-          "writable_variables": "Zapisovatelné proměnné"
+          "host": "IP adresa",
+          "port": "Port",
+          "station_addr": "Adresa stanice",
+          "client_addr": "Adresa klienta",
+          "password": "Heslo",
+          "scan_interval": "Interval aktualizace (sekundy)"
+        }
+      },
+      "variables": {
+        "title": "Výběr proměnných ke sledování",
+        "description": "Nalezeno {variable_count} čitelných proměnných. Vyberte které chcete sledovat (pouze pro čtení).",
+        "data": {
+          "selected_variables": "Proměnné ke sledování"
+        }
+      },
+      "writable": {
+        "title": "Výběr proměnných k ovládání",
+        "description": "Z {selected_count} vybraných proměnných vyberte, které chcete ovládat (zapisovat hodnoty). Tyto budou zobrazeny jako ovládací prvky místo senzorů.",
+        "data": {
+          "writable_variables": "Proměnné k ovládání"
         }
       }
     },
     "error": {
-      "cannot_connect": "Nepodařilo se připojit k PLC. Zkontrolujte IP adresu a port.",
+      "cannot_connect": "Nepodařilo se připojit k PLC. Zkontrolujte IP adresu a síť.",
+      "file_not_found": "Záložní soubor nebyl nalezen.",
+      "invalid_file": "Neplatný formát záložního souboru.",
+      "no_backups": "Ve složce www/amit/ nebyly nalezeny žádné zálohy.",
       "unknown": "Nastala neznámá chyba."
-    },
-    "abort": {
-      "already_configured": "Toto PLC je již nakonfigurováno."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Nastavení AMiT PLC",
-        "description": "Upravte nastavení integrace.",
+        "title": "AMiT - Výběr proměnných",
+        "description": "Nalezeno {variable_count} proměnných. Vyberte které chcete sledovat.",
         "data": {
+          "selected_variables": "Proměnné ke sledování",
           "scan_interval": "Interval aktualizace (sekundy)"
         }
       },
-      "select_variables": {
-        "title": "Výběr proměnných",
-        "description": "Vyberte proměnné ke sledování.",
+      "writable": {
+        "title": "AMiT - Výběr ovládacích prvků",
+        "description": "Z {selected_count} vybraných proměnných vyberte, které chcete ovládat.",
         "data": {
-          "variables": "Proměnné ke sledování"
-        }
-      },
-      "select_writable": {
-        "title": "Zapisovatelné proměnné",
-        "description": "Vyberte které proměnné chcete ovládat.",
-        "data": {
-          "writable_variables": "Zapisovatelné proměnné"
+          "writable_variables": "Proměnné k ovládání"
         }
       }
+    },
+    "error": {
+      "cannot_connect": "Nepodařilo se připojit k PLC pro načtení seznamu proměnných."
     }
   },
   "entity": {
     "button": {
+      "export_configuration": {
+        "name": "Exportovat konfiguraci"
+      },
       "reload_variables": {
         "name": "Znovu načíst proměnné"
       }
