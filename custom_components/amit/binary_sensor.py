@@ -29,28 +29,26 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     variables = data["variables"]
+    writable_wids = data["writable_wids"]
     
     entities = []
     
     for variable in variables:
-        # Create binary sensors for Int16 variables that look like boolean states
-        if variable.var_type == VarType.INT16 and not variable.writable:
-            if _is_binary_state(variable):
+        # Create binary sensor only if:
+        # 1. Variable is NOT in writable_wids
+        # 2. Variable is INT16 with binary state name
+        if variable.wid not in writable_wids:
+            if variable.var_type == VarType.INT16 and _is_binary_state(variable):
                 entities.append(AMiTBinarySensor(coordinator, variable, entry))
     
     async_add_entities(entities)
 
 
 def _is_binary_state(variable: Variable) -> bool:
-    """Check if variable represents a binary state."""
+    """Check if INT16 variable represents a binary state."""
     name = variable.name
     binary_prefixes = (
-        'Por',      # Faults/errors
-        'ALARM',    # Alarms  
-        'HAVARIE',  # Critical errors
-        'Odtavani', # Defrost state
-        'Leto',     # Summer mode
-        'TOPIT',    # Heating active
+        'Por', 'ALARM', 'HAVARIE', 'Odtavani', 'Leto', 'TOPIT', 'Stav',
     )
     return name.startswith(binary_prefixes)
 

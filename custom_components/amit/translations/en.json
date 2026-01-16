@@ -2,6 +2,13 @@
   "config": {
     "step": {
       "user": {
+        "title": "AMiT PLC Setup",
+        "description": "Choose how to set up your AMiT PLC integration.",
+        "data": {
+          "setup_type": "Setup type"
+        }
+      },
+      "connection": {
         "title": "AMiT PLC Connection",
         "description": "Enter connection details for your AMiT PLC.",
         "data": {
@@ -13,27 +20,63 @@
           "scan_interval": "Scan Interval (seconds)"
         }
       },
+      "import_select": {
+        "title": "Import from Backup",
+        "description": "Found {backup_count} backup file(s). Select which one to restore.",
+        "data": {
+          "backup_file": "Backup file"
+        }
+      },
+      "import_confirm": {
+        "title": "Confirm Import",
+        "description": "Backup contains {monitored_count} monitored and {writable_count} writable variables. Verify connection settings and enter password.",
+        "data": {
+          "host": "IP Address",
+          "port": "Port",
+          "station_addr": "Station Address",
+          "client_addr": "Client Address",
+          "password": "Password",
+          "scan_interval": "Scan Interval (seconds)"
+        }
+      },
       "variables": {
-        "title": "Select Variables",
-        "description": "Found {variable_count} readable variables. Select which ones to monitor.",
+        "title": "Select Variables to Monitor",
+        "description": "Found {variable_count} readable variables. Select which ones to monitor (read-only sensors).",
         "data": {
           "selected_variables": "Variables to monitor"
+        }
+      },
+      "writable": {
+        "title": "Select Variables to Control",
+        "description": "From the {selected_count} selected variables, choose which ones you want to control (write values). These will be shown as adjustable controls instead of read-only sensors.",
+        "data": {
+          "writable_variables": "Variables to control"
         }
       }
     },
     "error": {
       "cannot_connect": "Cannot connect to PLC. Check IP address and network.",
+      "file_not_found": "Backup file not found.",
+      "invalid_file": "Invalid backup file format.",
+      "no_backups": "No backup files found in www/amit/ folder.",
       "unknown": "Unknown error occurred."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "AMiT Options",
-        "description": "Found {variable_count} variables. Change selection and scan interval.",
+        "title": "AMiT - Select Variables",
+        "description": "Found {variable_count} variables. Select which ones to monitor.",
         "data": {
           "selected_variables": "Variables to monitor",
           "scan_interval": "Scan Interval (seconds)"
+        }
+      },
+      "writable": {
+        "title": "AMiT - Select Controls",
+        "description": "From the {selected_count} selected variables, choose which ones to control.",
+        "data": {
+          "writable_variables": "Variables to control"
         }
       }
     },

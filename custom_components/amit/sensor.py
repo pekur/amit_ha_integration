@@ -11,12 +11,12 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, TEMPERATURE_PREFIXES
+from .const import DOMAIN
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,22 +31,30 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     variables = data["variables"]
+    writable_wids = data["writable_wids"]
     
     entities = []
     
     for variable in variables:
-        # Only create sensors for readable, non-writable variables
-        # or Float/Int variables that look like measurements
-        if variable.is_readable():
-            if not variable.writable or _is_measurement(variable):
+        # Create sensor only if:
+        # 1. Variable is readable (numeric type)
+        # 2. Variable is NOT marked as writable by user
+        # 3. Variable is not BOOL type (those go to binary_sensor)
+        if variable.is_readable() and variable.wid not in writable_wids:
+            if variable.var_type != VarType.INT16 or not _is_binary_state(variable):
+                # Numeric sensors (not binary states)
                 entities.append(AMiTSensor(coordinator, variable, entry))
     
     async_add_entities(entities)
 
 
-def _is_measurement(variable: Variable) -> bool:
-    """Check if variable is a measurement (temperature, etc.)."""
-    return variable.name.startswith(TEMPERATURE_PREFIXES)
+def _is_binary_state(variable: Variable) -> bool:
+    """Check if INT16 variable represents a binary state."""
+    name = variable.name
+    binary_prefixes = (
+        'Por', 'ALARM', 'HAVARIE', 'Odtavani', 'Leto', 'TOPIT', 'Stav',
+    )
+    return name.startswith(binary_prefixes)
 
 
 class AMiTSensor(CoordinatorEntity, SensorEntity):
@@ -84,13 +92,13 @@ class AMiTSensor(CoordinatorEntity, SensorEntity):
     def _is_temperature(self) -> bool:
         """Check if this is a temperature sensor."""
         name = self._variable.name
-        # Temperature variables typically start with T, TE, Teoko, etc.
-        # and have values in reasonable temperature range
-        if name.startswith(('TE', 'Teoko', 'Trek', 'TTUV', 'TPRIV', 'TVENK', 'pokoj', 'koupl', 'T')):
-            # Check if it's actually a temperature (not Tpr, Tlovl, etc.)
-            if name.startswith(('Tpr', 'Tlovl', 'test')):
-                return False
+        temp_prefixes = ('TE', 'Teoko', 'Trek', 'TTUV', 'TPRIV', 'TVENK', 'pokoj', 'koupl', 'T1p')
+        if name.startswith(temp_prefixes):
             return True
+        # Generic T prefix for float types, excluding known non-temps
+        if name.startswith('T') and not name.startswith(('Tpr', 'Tlovl', 'test', 'Typ', 'Tim')):
+            if self._variable.var_type == VarType.FLOAT:
+                return True
         return False
 
     @property
@@ -115,5 +123,4 @@ class AMiTSensor(CoordinatorEntity, SensorEntity):
         return {
             "wid": self._variable.wid,
             "variable_type": self._variable.type_name,
-            "writable": self._variable.writable,
         }

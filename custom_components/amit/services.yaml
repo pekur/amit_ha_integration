@@ -29,3 +29,15 @@ write_variable:
 reload_variables:
   name: Reload Variables
   description: Reload variable list from PLC.
+
+export_config:
+  name: Export Configuration
+  description: Export selected variables and custom entity names to a JSON file.
+  fields:
+    filename:
+      name: Filename
+      description: Output filename (will be saved in Home Assistant config directory)
+      default: "amit_config_export.json"
+      example: "amit_backup_2024.json"
+      selector:
+        text:

@@ -10,6 +10,8 @@ CONF_CLIENT_ADDR = "client_addr"
 CONF_PASSWORD = "password"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_VARIABLES = "variables"
+CONF_WRITABLE_VARIABLES = "writable_variables"  # Variables that user wants to control (write)
+CONF_CUSTOM_NAMES = "custom_names"  # WID -> custom name mapping from import
 
 # Defaults
 DEFAULT_PORT = 59
@@ -21,9 +23,10 @@ DEFAULT_SCAN_INTERVAL = 30
 # Services
 SERVICE_WRITE_VARIABLE = "write_variable"
 SERVICE_RELOAD_VARIABLES = "reload_variables"
+SERVICE_EXPORT_CONFIG = "export_config"
 
 # Platforms
-PLATFORMS = ["sensor", "number", "binary_sensor", "switch"]
+PLATFORMS = ["sensor", "number", "binary_sensor", "switch", "button"]
 
 # Variable categories for UI grouping
 CATEGORY_TEMPERATURE = "temperature"

@@ -27,30 +27,27 @@ async def async_setup_entry(
     coordinator = data["coordinator"]
     client = data["client"]
     variables = data["variables"]
+    writable_wids = data["writable_wids"]
     
     entities = []
     
     for variable in variables:
-        # Create switches for writable Int16 variables that look like on/off controls
-        if variable.var_type == VarType.INT16 and variable.writable:
-            if _is_switch_control(variable):
+        # Create switch only if:
+        # 1. Variable is in writable_wids (user marked it as writable)
+        # 2. Variable is INT16 with switch-like name
+        if variable.wid in writable_wids:
+            if variable.var_type == VarType.INT16 and _is_switch_control(variable):
                 entities.append(AMiTSwitch(coordinator, client, variable, entry))
     
     async_add_entities(entities)
 
 
 def _is_switch_control(variable: Variable) -> bool:
-    """Check if variable is an on/off control."""
+    """Check if INT16 variable is an on/off control based on name."""
     name = variable.name
     switch_prefixes = (
-        'Zap',      # Enable/disable
-        'Povol',    # Allow
-        'RUC',      # Manual mode
-        'AUT',      # Auto mode
-        'Blok',     # Block
-        'zapni',    # Turn on
+        'Zap', 'Povol', 'RUC', 'AUT', 'Blok', 'zapni',
     )
-    # Exclude some that are not really switches
     exclude_prefixes = ('ZapodH', 'Zapod_', 'ZapodTL')
     
     if name.startswith(exclude_prefixes):
