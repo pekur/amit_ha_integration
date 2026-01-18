@@ -27,6 +27,7 @@ from .const import (
     CONF_VARIABLES,
     CONF_WRITABLE_VARIABLES,
     CONF_CUSTOM_NAMES,
+    CONF_CUSTOM_ENTITY_IDS,
     DEFAULT_PORT,
     DEFAULT_STATION_ADDR,
     DEFAULT_CLIENT_ADDR,
@@ -42,9 +43,14 @@ from .protocol import AMiTClient, Variable, VarType
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _apply_custom_names(hass: HomeAssistant, entry: ConfigEntry, custom_names: dict[str, str]) -> None:
-    """Apply custom entity names from import."""
-    _LOGGER.info(f"Applying custom names: {custom_names}")
+async def _apply_custom_names_and_ids(
+    hass: HomeAssistant, 
+    entry: ConfigEntry, 
+    custom_names: dict[str, str],
+    custom_entity_ids: dict[str, str]
+) -> None:
+    """Apply custom entity names and entity_ids from import."""
+    _LOGGER.info(f"Applying custom names: {len(custom_names)}, custom entity_ids: {len(custom_entity_ids)}")
     
     ent_reg = er.async_get(hass)
     
@@ -53,7 +59,9 @@ async def _apply_custom_names(hass: HomeAssistant, entry: ConfigEntry, custom_na
     
     _LOGGER.info(f"Found {len(entity_entries)} entities for config entry")
     
-    applied_count = 0
+    applied_names = 0
+    applied_ids = 0
+    
     for entity_entry in entity_entries:
         _LOGGER.debug(f"Entity: {entity_entry.entity_id}, unique_id: {entity_entry.unique_id}")
         
@@ -61,6 +69,7 @@ async def _apply_custom_names(hass: HomeAssistant, entry: ConfigEntry, custom_na
         # - sensor: {entry_id}_{wid}
         # - number: {entry_id}_{wid}_number
         # - switch: {entry_id}_{wid}_switch
+        # - binary_sensor: {entry_id}_{wid}_binary
         # - button: {entry_id}_export_config, {entry_id}_reload_variables
         
         if "_" not in entity_entry.unique_id:
@@ -75,25 +84,67 @@ async def _apply_custom_names(hass: HomeAssistant, entry: ConfigEntry, custom_na
                 wid = part
                 break
         
-        if wid and wid in custom_names:
-            custom_name = custom_names[wid]
-            _LOGGER.info(f"Applying custom name '{custom_name}' to {entity_entry.entity_id} (WID: {wid})")
-            # Update entity name in registry
-            ent_reg.async_update_entity(
-                entity_entry.entity_id,
-                name=custom_name
-            )
-            applied_count += 1
-    
-    if applied_count > 0:
-        _LOGGER.info(f"Applied {applied_count} custom entity names from backup")
-    else:
-        _LOGGER.warning(f"No custom names were applied. Custom names keys: {list(custom_names.keys())}")
+        if not wid:
+            continue
         
-    # Remove custom_names from config entry data (no longer needed)
+        # Prepare update kwargs
+        update_kwargs = {}
+        
+        # Apply custom name if available
+        if wid in custom_names:
+            custom_name = custom_names[wid]
+            _LOGGER.info(f"Will apply custom name '{custom_name}' to {entity_entry.entity_id} (WID: {wid})")
+            update_kwargs["name"] = custom_name
+            applied_names += 1
+        
+        # Apply custom entity_id if available
+        if wid in custom_entity_ids:
+            desired_entity_id = custom_entity_ids[wid]
+            current_entity_id = entity_entry.entity_id
+            
+            # Extract just the object_id part (after the domain.)
+            # e.g., "sensor.bs_teplota_tuv" -> we need to match domain
+            if "." in desired_entity_id:
+                desired_domain, desired_object_id = desired_entity_id.split(".", 1)
+                current_domain = current_entity_id.split(".")[0]
+                
+                # Only change if domains match (sensor -> sensor, etc.)
+                if desired_domain == current_domain and current_entity_id != desired_entity_id:
+                    # Check if desired entity_id is available
+                    existing = ent_reg.async_get(desired_entity_id)
+                    if existing is None:
+                        _LOGGER.info(f"Will change entity_id from '{current_entity_id}' to '{desired_entity_id}' (WID: {wid})")
+                        update_kwargs["new_entity_id"] = desired_entity_id
+                        applied_ids += 1
+                    else:
+                        _LOGGER.warning(f"Cannot change entity_id to '{desired_entity_id}' - already exists")
+        
+        # Apply updates if any
+        if update_kwargs:
+            try:
+                ent_reg.async_update_entity(entity_entry.entity_id, **update_kwargs)
+            except Exception as e:
+                _LOGGER.error(f"Failed to update entity {entity_entry.entity_id}: {e}")
+    
+    if applied_names > 0:
+        _LOGGER.info(f"Applied {applied_names} custom entity names from backup")
+    if applied_ids > 0:
+        _LOGGER.info(f"Applied {applied_ids} custom entity IDs from backup")
+        
+    if applied_names == 0 and applied_ids == 0:
+        _LOGGER.warning(f"No custom names or IDs were applied. Names keys: {list(custom_names.keys())}, IDs keys: {list(custom_entity_ids.keys())}")
+        
+    # Remove custom_names and custom_entity_ids from config entry data (no longer needed)
     new_data = dict(entry.data)
     new_data.pop(CONF_CUSTOM_NAMES, None)
+    new_data.pop(CONF_CUSTOM_ENTITY_IDS, None)
     hass.config_entries.async_update_entry(entry, data=new_data)
+
+
+# Keep backward compatibility with old function name
+async def _apply_custom_names(hass: HomeAssistant, entry: ConfigEntry, custom_names: dict[str, str]) -> None:
+    """Apply custom entity names from import (backward compatibility)."""
+    await _apply_custom_names_and_ids(hass, entry, custom_names, {})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -171,10 +222,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Set up platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     
-    # Apply custom names from import (if any)
+    # Apply custom names and entity_ids from import (if any)
     custom_names = entry.data.get(CONF_CUSTOM_NAMES, {})
-    if custom_names:
-        await _apply_custom_names(hass, entry, custom_names)
+    custom_entity_ids = entry.data.get(CONF_CUSTOM_ENTITY_IDS, {})
+    if custom_names or custom_entity_ids:
+        await _apply_custom_names_and_ids(hass, entry, custom_names, custom_entity_ids)
     
     # Register services
     async def handle_write_variable(call: ServiceCall) -> None:

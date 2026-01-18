@@ -26,6 +26,7 @@ from .const import (
     CONF_VARIABLES,
     CONF_WRITABLE_VARIABLES,
     CONF_CUSTOM_NAMES,
+    CONF_CUSTOM_ENTITY_IDS,
     DEFAULT_PORT,
     DEFAULT_STATION_ADDR,
     DEFAULT_CLIENT_ADDR,
@@ -176,7 +177,7 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         
         if www_amit_dir.exists():
             backup_files = sorted(
-                [f.name for f in www_amit_dir.glob("amit_export_*.json")],
+                [f.name for f in www_amit_dir.glob("amit_export_*.json") | www_amit_dir.glob("amit_*.json")],
                 reverse=True  # Newest first
             )
         
@@ -254,6 +255,17 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if custom_names:
                     self._data[CONF_CUSTOM_NAMES] = custom_names
                     _LOGGER.info(f"Import: found {len(custom_names)} custom entity names")
+                
+                # Extract custom entity_ids from backup
+                custom_entity_ids = {}
+                for var in backup_monitored + backup_writable:
+                    if var.get("entity_id") and str(var["wid"]) in current_wids:
+                        # Store the full entity_id (e.g., "sensor.bs_teplota_tuv")
+                        custom_entity_ids[str(var["wid"])] = var["entity_id"]
+                
+                if custom_entity_ids:
+                    self._data[CONF_CUSTOM_ENTITY_IDS] = custom_entity_ids
+                    _LOGGER.info(f"Import: found {len(custom_entity_ids)} custom entity IDs")
                 
                 # Calculate stats for summary
                 total_backup = len(backup_monitored) + len(backup_writable)

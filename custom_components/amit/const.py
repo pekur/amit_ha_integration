@@ -12,6 +12,7 @@ CONF_SCAN_INTERVAL = "scan_interval"
 CONF_VARIABLES = "variables"
 CONF_WRITABLE_VARIABLES = "writable_variables"  # Variables that user wants to control (write)
 CONF_CUSTOM_NAMES = "custom_names"  # WID -> custom name mapping from import
+CONF_CUSTOM_ENTITY_IDS = "custom_entity_ids"  # WID -> custom entity_id mapping from import
 
 # Defaults
 DEFAULT_PORT = 59
