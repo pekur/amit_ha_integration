@@ -145,8 +145,14 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             selected_file = user_input.get("backup_file")
             if selected_file:
                 try:
+                    # Sanitize filename - prevent path traversal
+                    safe_filename = Path(selected_file).name
+                    if safe_filename != selected_file or ".." in selected_file:
+                        errors["base"] = "invalid_filename"
+                        raise ValueError("Invalid filename")
+                    
                     # Load the backup file
-                    backup_path = Path(self.hass.config.config_dir) / "www" / "amit" / selected_file
+                    backup_path = Path(self.hass.config.config_dir) / "www" / "amit" / safe_filename
                     with open(backup_path, "r", encoding="utf-8") as f:
                         self._import_data = json.load(f)
                     

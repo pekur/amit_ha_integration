@@ -247,6 +247,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error(f"Variable not found: wid={wid}, name={name}")
             return
         
+        # Validate and convert value type
+        try:
+            if variable.var_type == VarType.FLOAT:
+                value = float(value)
+            elif variable.var_type in (VarType.INT16, VarType.INT32):
+                value = int(value)
+        except (ValueError, TypeError) as e:
+            _LOGGER.error(f"Invalid value type for {variable.name} ({variable.type_name}): {value}")
+            return
+        
         try:
             success = await client.write_variable(variable, value)
             if success:
@@ -338,7 +348,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         www_dir = Path(hass.config.config_dir) / "www" / "amit"
         www_dir.mkdir(parents=True, exist_ok=True)
         
-        filename = call.data.get("filename", f"amit_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        # Sanitize filename - prevent path traversal
+        raw_filename = call.data.get("filename", f"amit_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        filename = Path(raw_filename).name  # Remove any path components
+        if not filename.endswith(".json"):
+            filename += ".json"
         export_path = www_dir / filename
         
         try:

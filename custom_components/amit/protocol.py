@@ -319,7 +319,7 @@ class AMiTClient:
         self._protocol._response_future = loop.create_future()
         
         # Send
-        _LOGGER.debug(f"Sending {len(msg)} bytes, transaction_id={self._transaction_id}, key=0x{self._key:08x}")
+        _LOGGER.debug(f"Sending {len(msg)} bytes, transaction_id={self._transaction_id}")
         self._transport.sendto(bytes(msg))
         self._transaction_id += 1
         
@@ -339,7 +339,7 @@ class AMiTClient:
         resp_type = struct.unpack_from('<h', data, 4)[0]
         if resp_type == TYPE_SYNC_KEY:
             self._key = struct.unpack_from('<I', data, 6)[0]
-            _LOGGER.debug(f"Key sync received: 0x{self._key:08x}, retrying...")
+            _LOGGER.debug("Key sync received, retrying...")
             # Retry with new key (recursive call without lock)
             return await self._send_receive_internal(payload)
         
