@@ -2,13 +2,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from datetime import timedelta, datetime
-from pathlib import Path
+from datetime import timedelta
 from typing import Any
-
-import aiofiles
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -35,7 +31,6 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     SERVICE_WRITE_VARIABLE,
     SERVICE_RELOAD_VARIABLES,
-    SERVICE_EXPORT_CONFIG,
     PLATFORMS,
 )
 from .protocol import AMiTClient, Variable, VarType
@@ -228,178 +223,90 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if custom_names or custom_entity_ids:
         await _apply_custom_names_and_ids(hass, entry, custom_names, custom_entity_ids)
     
-    # Register services
-    async def handle_write_variable(call: ServiceCall) -> None:
-        """Handle write_variable service call."""
-        wid = call.data.get("wid")
-        name = call.data.get("name")
-        value = call.data["value"]
-        
-        if wid:
-            variable = variables_by_wid.get(int(wid))
-        elif name:
-            variable = variables_by_name.get(name)
-        else:
-            _LOGGER.error("Either 'wid' or 'name' must be provided")
-            return
-        
-        if variable is None:
-            _LOGGER.error(f"Variable not found: wid={wid}, name={name}")
-            return
-        
-        # Validate and convert value type
-        try:
-            if variable.var_type == VarType.FLOAT:
-                value = float(value)
-            elif variable.var_type in (VarType.INT16, VarType.INT32):
-                value = int(value)
-        except (ValueError, TypeError) as e:
-            _LOGGER.error(f"Invalid value type for {variable.name} ({variable.type_name}): {value}")
-            return
-        
-        try:
-            success = await client.write_variable(variable, value)
-            if success:
-                _LOGGER.info(f"Wrote {value} to {variable.name}")
-                await coordinator.async_request_refresh()
+    # Register services only once (guard against multiple entries)
+    if not hass.services.has_service(DOMAIN, SERVICE_WRITE_VARIABLE):
+
+        async def handle_write_variable(call: ServiceCall) -> None:
+            """Handle write_variable service call."""
+            entry_id = call.data.get("entry_id")
+            if entry_id and entry_id in hass.data[DOMAIN]:
+                entry_data = hass.data[DOMAIN][entry_id]
+            elif len(hass.data[DOMAIN]) == 1:
+                entry_data = next(iter(hass.data[DOMAIN].values()))
             else:
-                _LOGGER.error(f"Failed to write to {variable.name}")
-        except Exception as e:
-            _LOGGER.error(f"Error writing to {variable.name}: {e}")
-    
-    async def handle_reload_variables(call: ServiceCall) -> None:
-        """Handle reload_variables service call."""
-        all_vars = await client.load_variables()
-        hass.data[DOMAIN][entry.entry_id]["all_variables"] = all_vars
-        _LOGGER.info(f"Reloaded {len(all_vars)} variables from PLC")
-    
-    async def handle_export_config(call: ServiceCall) -> None:
-        """Handle export_config service call - export selected variables with custom names."""
-        filename = call.data.get("filename", "amit_config_export.json")
-        
-        # Get entity registry
-        ent_reg = er.async_get(hass)
-        
-        # Build export data
-        export_data = {
-            "export_date": datetime.now().isoformat(),
-            "plc_connection": {
-                "host": entry.data[CONF_HOST],
-                "port": entry.data.get(CONF_PORT, DEFAULT_PORT),
-                "station_addr": entry.data.get(CONF_STATION_ADDR, DEFAULT_STATION_ADDR),
-                "client_addr": entry.data.get(CONF_CLIENT_ADDR, DEFAULT_CLIENT_ADDR),
-            },
-            "scan_interval": entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-            "monitored_variables": [],
-            "writable_variables": [],
-        }
-        
-        # Get all entities for this config entry
-        entity_entries = er.async_entries_for_config_entry(ent_reg, entry.entry_id)
-        
-        # Create lookup: wid -> entity info (extract WID from unique_id)
-        entity_info_by_wid = {}
-        for entity_entry in entity_entries:
-            # Extract WID from unique_id (it's the numeric part)
-            parts = entity_entry.unique_id.split("_")
-            wid = None
-            for part in reversed(parts):
-                if part.isdigit():
-                    wid = int(part)
-                    break
-            
+                _LOGGER.error(
+                    "Multiple PLCs configured — specify entry_id in service call"
+                )
+                return
+
+            _client = entry_data["client"]
+            _variables_by_wid = entry_data["variables_by_wid"]
+            _variables_by_name = entry_data["variables_by_name"]
+            _coordinator = entry_data["coordinator"]
+
+            wid = call.data.get("wid")
+            name = call.data.get("name")
+            value = call.data["value"]
+
             if wid:
-                entity_info_by_wid[wid] = {
-                    "entity_id": entity_entry.entity_id,
-                    "custom_name": entity_entry.name,  # None if not customized
-                    "original_name": entity_entry.original_name,
-                    "platform": entity_entry.platform,
-                    "disabled": entity_entry.disabled,
-                }
-        
-        writable_wids = hass.data[DOMAIN][entry.entry_id]["writable_wids"]
-        
-        # Process all selected variables
-        for variable in variables:
-            ent_info = entity_info_by_wid.get(variable.wid)
-            
-            var_export = {
-                "wid": variable.wid,
-                "plc_name": variable.name,
-                "var_type": variable.var_type.value if hasattr(variable.var_type, 'value') else variable.var_type,
-                "type_name": variable.type_name,
-            }
-            
-            if ent_info:
-                var_export["entity_id"] = ent_info["entity_id"]
-                if ent_info["custom_name"]:
-                    var_export["custom_name"] = ent_info["custom_name"]
-                var_export["original_name"] = ent_info["original_name"]
-                var_export["disabled"] = ent_info["disabled"]
-            
-            # Add to appropriate list
-            if variable.wid in writable_wids:
-                var_export["writable"] = True
-                export_data["writable_variables"].append(var_export)
+                variable = _variables_by_wid.get(int(wid))
+            elif name:
+                variable = _variables_by_name.get(name)
             else:
-                export_data["monitored_variables"].append(var_export)
-        
-        # Write to file in www folder for download access
-        www_dir = Path(hass.config.config_dir) / "www" / "amit"
-        www_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Sanitize filename - prevent path traversal
-        raw_filename = call.data.get("filename", f"amit_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-        filename = Path(raw_filename).name  # Remove any path components
-        if not filename.endswith(".json"):
-            filename += ".json"
-        export_path = www_dir / filename
-        
-        try:
-            async with aiofiles.open(export_path, "w", encoding="utf-8") as f:
-                await f.write(json.dumps(export_data, indent=2, ensure_ascii=False))
-            
-            _LOGGER.info(f"Exported AMiT config to {export_path}")
-            _LOGGER.info(f"  - {len(export_data['monitored_variables'])} monitored variables")
-            _LOGGER.info(f"  - {len(export_data['writable_variables'])} writable variables")
-            
-            # Create persistent notification with download link
-            download_url = f"/local/amit/{filename}"
-            await hass.services.async_call(
-                "persistent_notification",
-                "create",
-                {
-                    "title": "AMiT Export Complete",
-                    "message": f"Configuration exported successfully!\n\n"
-                              f"- {len(export_data['monitored_variables'])} monitored variables\n"
-                              f"- {len(export_data['writable_variables'])} writable variables\n\n"
-                              f"**[⬇️ Download {filename}]({download_url})**",
-                    "notification_id": "amit_export",
-                },
-            )
-        except Exception as e:
-            _LOGGER.error(f"Failed to export config: {e}")
-            raise
-    
-    hass.services.async_register(
-        DOMAIN, SERVICE_WRITE_VARIABLE, handle_write_variable
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_RELOAD_VARIABLES, handle_reload_variables
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_EXPORT_CONFIG, handle_export_config
-    )
-    
+                _LOGGER.error("Either 'wid' or 'name' must be provided")
+                return
+
+            if variable is None:
+                _LOGGER.error("Variable not found: wid=%s, name=%s", wid, name)
+                return
+
+            try:
+                if variable.var_type == VarType.FLOAT:
+                    value = float(value)
+                elif variable.var_type in (VarType.INT16, VarType.INT32):
+                    value = int(value)
+            except (ValueError, TypeError):
+                _LOGGER.error(
+                    "Invalid value type for %s (%s): %s",
+                    variable.name, variable.type_name, value,
+                )
+                return
+
+            try:
+                success = await _client.write_variable(variable, value)
+                if success:
+                    _LOGGER.info("Wrote %s to %s", value, variable.name)
+                    await _coordinator.async_request_refresh()
+                else:
+                    _LOGGER.error("Failed to write to %s", variable.name)
+            except Exception as e:
+                _LOGGER.error("Error writing to %s: %s", variable.name, e)
+
+        async def handle_reload_variables(call: ServiceCall) -> None:
+            """Handle reload_variables service call."""
+            for eid, entry_data in hass.data[DOMAIN].items():
+                _client = entry_data["client"]
+                all_vars = await _client.load_variables()
+                entry_data["all_variables"] = all_vars
+                _LOGGER.info("Reloaded %d variables from PLC (entry %s)", len(all_vars), eid)
+
+        hass.services.async_register(DOMAIN, SERVICE_WRITE_VARIABLE, handle_write_variable)
+        hass.services.async_register(DOMAIN, SERVICE_RELOAD_VARIABLES, handle_reload_variables)
+
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    
+
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id)
         await data["client"].disconnect()
-    
+
+    # Unregister services when the last entry is removed
+    if not hass.data[DOMAIN]:
+        hass.services.async_remove(DOMAIN, SERVICE_WRITE_VARIABLE)
+        hass.services.async_remove(DOMAIN, SERVICE_RELOAD_VARIABLES)
+
     return unload_ok
