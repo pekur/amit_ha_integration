@@ -278,6 +278,15 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 total_restored = len(all_selected)
                 
                 _LOGGER.info(f"Import: restored {total_restored}/{total_backup} variables from backup")
+
+                # Prevent duplicate entries
+                unique_id = (
+                    f"{self._data[CONF_HOST]}:"
+                    f"{self._data.get(CONF_PORT, DEFAULT_PORT)}:"
+                    f"{self._data.get(CONF_STATION_ADDR, DEFAULT_STATION_ADDR)}"
+                )
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_configured()
                 
                 return self.async_create_entry(
                     title=f"AMiT PLC ({self._data[CONF_HOST]})",
@@ -324,6 +333,15 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 info = await validate_connection(self.hass, user_input)
                 self._data = user_input
                 self._variables = info["variables"]
+
+                # Prevent duplicate entries
+                unique_id = (
+                    f"{user_input[CONF_HOST]}:"
+                    f"{user_input.get(CONF_PORT, DEFAULT_PORT)}:"
+                    f"{user_input.get(CONF_STATION_ADDR, DEFAULT_STATION_ADDR)}"
+                )
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_configured()
                 
                 return await self.async_step_variables()
                 
