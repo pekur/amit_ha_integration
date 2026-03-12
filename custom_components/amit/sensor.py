@@ -12,11 +12,10 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .entity import AMiTEntity
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,7 +56,7 @@ def _is_binary_state(variable: Variable) -> bool:
     return name.startswith(binary_prefixes)
 
 
-class AMiTSensor(CoordinatorEntity, SensorEntity):
+class AMiTSensor(AMiTEntity, SensorEntity):
     """Representation of an AMiT sensor."""
 
     def __init__(
@@ -67,13 +66,12 @@ class AMiTSensor(CoordinatorEntity, SensorEntity):
         entry: ConfigEntry,
     ) -> None:
         """Initialize the sensor."""
-        super().__init__(coordinator)
+        super().__init__(coordinator, entry)
         self._variable = variable
-        self._entry = entry
-        
+
         self._attr_unique_id = f"{entry.entry_id}_{variable.wid}"
         self._attr_name = variable.name
-        
+
         # Determine device class and unit
         if self._is_temperature():
             self._attr_device_class = SensorDeviceClass.TEMPERATURE
@@ -81,13 +79,6 @@ class AMiTSensor(CoordinatorEntity, SensorEntity):
             self._attr_state_class = SensorStateClass.MEASUREMENT
         elif variable.var_type == VarType.FLOAT:
             self._attr_state_class = SensorStateClass.MEASUREMENT
-        
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name=f"AMiT PLC ({entry.data['host']})",
-            manufacturer="AMiT",
-            model="PLC",
-        )
 
     def _is_temperature(self) -> bool:
         """Check if this is a temperature sensor."""

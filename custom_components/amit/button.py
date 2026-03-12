@@ -11,10 +11,10 @@ import aiofiles
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers import entity_registry as er
 
+from .entity import get_device_info
 from .const import (
     DOMAIN,
     CONF_HOST,
@@ -54,13 +54,7 @@ class AMiTExportButton(ButtonEntity):
         self._attr_unique_id = f"{entry.entry_id}_export_config"
         self._attr_name = "Export Configuration"
         self._attr_icon = "mdi:download"
-        
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name=f"AMiT PLC ({entry.data['host']})",
-            manufacturer="AMiT",
-            model="PLC",
-        )
+        self._attr_device_info = get_device_info(entry)
 
     async def async_press(self) -> None:
         """Handle button press - export configuration."""
@@ -182,13 +176,7 @@ class AMiTReloadButton(ButtonEntity):
         self._attr_unique_id = f"{entry.entry_id}_reload_variables"
         self._attr_name = "Reload Variables"
         self._attr_icon = "mdi:refresh"
-        
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name=f"AMiT PLC ({entry.data['host']})",
-            manufacturer="AMiT",
-            model="PLC",
-        )
+        self._attr_device_info = get_device_info(entry)
 
     async def async_press(self) -> None:
         """Handle button press - reload variables from PLC."""

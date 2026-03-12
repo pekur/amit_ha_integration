@@ -8,11 +8,10 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .entity import AMiTEntity
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,7 +58,7 @@ def _is_switch_control(variable: Variable) -> bool:
     return name.startswith(switch_prefixes)
 
 
-class AMiTNumber(CoordinatorEntity, NumberEntity):
+class AMiTNumber(AMiTEntity, NumberEntity):
     """Representation of an AMiT number (setpoint or writable value)."""
 
     def __init__(
@@ -70,11 +69,10 @@ class AMiTNumber(CoordinatorEntity, NumberEntity):
         entry: ConfigEntry,
     ) -> None:
         """Initialize the number entity."""
-        super().__init__(coordinator)
+        super().__init__(coordinator, entry)
         self._variable = variable
         self._client = client
-        self._entry = entry
-        
+
         self._attr_unique_id = f"{entry.entry_id}_{variable.wid}_number"
         self._attr_name = variable.name
         self._attr_mode = NumberMode.BOX
@@ -109,13 +107,6 @@ class AMiTNumber(CoordinatorEntity, NumberEntity):
             self._attr_native_max_value = 2147483647
             self._attr_native_step = 1
         
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name=f"AMiT PLC ({entry.data['host']})",
-            manufacturer="AMiT",
-            model="PLC",
-        )
-
     def _is_offset_value(self) -> bool:
         """Check if this is an offset/hysteresis value (small range around zero)."""
         name = self._variable.name

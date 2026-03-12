@@ -10,11 +10,10 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .entity import AMiTEntity
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,7 +52,7 @@ def _is_binary_state(variable: Variable) -> bool:
     return name.startswith(binary_prefixes)
 
 
-class AMiTBinarySensor(CoordinatorEntity, BinarySensorEntity):
+class AMiTBinarySensor(AMiTEntity, BinarySensorEntity):
     """Representation of an AMiT binary sensor."""
 
     def __init__(
@@ -63,13 +62,12 @@ class AMiTBinarySensor(CoordinatorEntity, BinarySensorEntity):
         entry: ConfigEntry,
     ) -> None:
         """Initialize the binary sensor."""
-        super().__init__(coordinator)
+        super().__init__(coordinator, entry)
         self._variable = variable
-        self._entry = entry
-        
+
         self._attr_unique_id = f"{entry.entry_id}_{variable.wid}_binary"
         self._attr_name = variable.name
-        
+
         # Determine device class
         if variable.name.startswith(('Por', 'ALARM', 'HAVARIE')):
             self._attr_device_class = BinarySensorDeviceClass.PROBLEM
@@ -77,13 +75,6 @@ class AMiTBinarySensor(CoordinatorEntity, BinarySensorEntity):
             self._attr_device_class = BinarySensorDeviceClass.HEAT
         elif variable.name.startswith('Odtavani'):
             self._attr_device_class = BinarySensorDeviceClass.RUNNING
-        
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name=f"AMiT PLC ({entry.data['host']})",
-            manufacturer="AMiT",
-            model="PLC",
-        )
 
     @property
     def is_on(self) -> bool | None:

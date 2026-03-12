@@ -27,7 +27,8 @@ SERVICE_RELOAD_VARIABLES = "reload_variables"
 SERVICE_EXPORT_CONFIG = "export_config"
 
 # Platforms
-PLATFORMS = ["sensor", "number", "binary_sensor", "switch", "button"]
+from homeassistant.const import Platform
+PLATFORMS = [Platform.SENSOR, Platform.NUMBER, Platform.BINARY_SENSOR, Platform.SWITCH, Platform.BUTTON]
 
 # Variable categories for UI grouping
 CATEGORY_TEMPERATURE = "temperature"

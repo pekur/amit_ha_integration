@@ -7,11 +7,10 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .entity import AMiTEntity
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -55,7 +54,7 @@ def _is_switch_control(variable: Variable) -> bool:
     return name.startswith(switch_prefixes)
 
 
-class AMiTSwitch(CoordinatorEntity, SwitchEntity):
+class AMiTSwitch(AMiTEntity, SwitchEntity):
     """Representation of an AMiT switch."""
 
     def __init__(
@@ -66,20 +65,12 @@ class AMiTSwitch(CoordinatorEntity, SwitchEntity):
         entry: ConfigEntry,
     ) -> None:
         """Initialize the switch."""
-        super().__init__(coordinator)
+        super().__init__(coordinator, entry)
         self._variable = variable
         self._client = client
-        self._entry = entry
-        
+
         self._attr_unique_id = f"{entry.entry_id}_{variable.wid}_switch"
         self._attr_name = variable.name
-        
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name=f"AMiT PLC ({entry.data['host']})",
-            manufacturer="AMiT",
-            model="PLC",
-        )
 
     @property
     def is_on(self) -> bool | None:

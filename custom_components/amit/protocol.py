@@ -184,7 +184,7 @@ class AMiTClient:
     async def connect(self) -> bool:
         """Establish connection to PLC."""
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             self._transport, self._protocol = await loop.create_datagram_endpoint(
                 AMiTProtocol,
                 remote_addr=(self.host, self.port)
@@ -451,7 +451,7 @@ class AMiTClient:
                 consecutive_failures += 1
             
             index += 1
-            await asyncio.sleep(0.001)  # 20ms delay between reads
+            await asyncio.sleep(0.001)  # 1ms delay between reads
         
         _LOGGER.info(f"Loaded {len(variables)} variables from PLC")
         return sorted(variables, key=lambda v: v.wid)
