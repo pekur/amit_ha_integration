@@ -82,6 +82,9 @@
     },
     "error": {
       "cannot_connect": "Cannot connect to PLC to load variable list."
+    },
+    "abort": {
+      "already_configured": "This PLC is already configured."
     }
   }
 }
