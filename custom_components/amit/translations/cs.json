@@ -92,6 +92,9 @@
       "reload_variables": {
         "name": "Znovu načíst proměnné"
       }
+    },
+    "abort": {
+      "already_configured": "Toto PLC je již nakonfigurováno."
     }
   }
 }
