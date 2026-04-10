@@ -16,7 +16,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .entity import AMiTEntity
-from .heuristics import is_binary_state, is_temperature
+from .biosuntec.heuristics import is_binary_state, is_temperature
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
