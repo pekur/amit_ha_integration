@@ -36,17 +36,3 @@ CATEGORY_SETPOINT = "setpoint"
 CATEGORY_STATE = "state"
 CATEGORY_CONTROL = "control"
 CATEGORY_OTHER = "other"
-
-# Prefixes for automatic categorization
-TEMPERATURE_PREFIXES = (
-    "TE", "T", "Teoko", "Trek", "TTUV", "TPRIV", "TVENK", "pokoj", "koupl"
-)
-SETPOINT_PREFIXES = (
-    "Zad", "Komf", "Utl", "komf", "utl", "ZADANA", "Hmax", "Hmin"
-)
-STATE_PREFIXES = (
-    "Stav", "Por", "ALARM", "status", "Rez", "RV", "Zap", "HAVARIE"
-)
-CONTROL_PREFIXES = (
-    "AUT", "RUC", "Povol", "Blok", "zapni", "Cir", "Rek"
-)

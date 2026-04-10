@@ -33,6 +33,7 @@ from .const import (
     SERVICE_RELOAD_VARIABLES,
     PLATFORMS,
 )
+from .heuristics import is_readonly
 from .protocol import AMiTClient, Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -158,7 +159,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await client.connect()
     
     # Load all variables
-    all_variables = await client.load_variables()
+    all_variables = await client.load_variables(
+        is_readonly_fn=is_readonly,
+        wid_min=4000,
+        wid_max=6000,
+    )
     
     # Filter to selected variables
     selected_wids = set(int(w) for w in entry.data.get(CONF_VARIABLES, []))
@@ -286,7 +291,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             """Handle reload_variables service call."""
             for eid, entry_data in hass.data[DOMAIN].items():
                 _client = entry_data["client"]
-                all_vars = await _client.load_variables()
+                all_vars = await _client.load_variables(
+                    is_readonly_fn=is_readonly,
+                    wid_min=4000,
+                    wid_max=6000,
+                )
                 entry_data["all_variables"] = all_vars
                 _LOGGER.info("Reloaded %d variables from PLC (entry %s)", len(all_vars), eid)
 

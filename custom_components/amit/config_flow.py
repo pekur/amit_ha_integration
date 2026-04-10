@@ -33,6 +33,7 @@ from .const import (
     DEFAULT_PASSWORD,
     DEFAULT_SCAN_INTERVAL,
 )
+from .heuristics import is_readonly
 from .protocol import AMiTClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,7 +67,11 @@ async def validate_connection(hass: HomeAssistant, data: dict[str, Any]) -> dict
         
         _LOGGER.info("Connection test passed, loading variables...")
         
-        variables = await client.load_variables()
+        variables = await client.load_variables(
+            is_readonly_fn=is_readonly,
+            wid_min=4000,
+            wid_max=6000,
+        )
         
         _LOGGER.info(f"Successfully loaded {len(variables)} variables from PLC")
         
@@ -504,7 +509,11 @@ class AMiTOptionsFlow(config_entries.OptionsFlow):
                 )
                 
                 await client.connect()
-                variables = await client.load_variables()
+                variables = await client.load_variables(
+                    is_readonly_fn=is_readonly,
+                    wid_min=4000,
+                    wid_max=6000,
+                )
                 await client.disconnect()
                 
                 self._variables = [

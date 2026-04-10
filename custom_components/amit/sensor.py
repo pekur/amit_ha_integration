@@ -16,6 +16,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .entity import AMiTEntity
+from .heuristics import is_binary_state, is_temperature
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,21 +41,11 @@ async def async_setup_entry(
         # 2. Variable is NOT marked as writable by user
         # 3. Variable is not BOOL type (those go to binary_sensor)
         if variable.is_readable() and variable.wid not in writable_wids:
-            if variable.var_type != VarType.INT16 or not _is_binary_state(variable):
+            if variable.var_type != VarType.INT16 or not is_binary_state(variable.name):
                 # Numeric sensors (not binary states)
                 entities.append(AMiTSensor(coordinator, variable, entry))
     
     async_add_entities(entities)
-
-
-def _is_binary_state(variable: Variable) -> bool:
-    """Check if INT16 variable represents a binary state."""
-    name = variable.name
-    binary_prefixes = (
-        'Por', 'ALARM', 'HAVARIE', 'Odtavani', 'Leto', 'TOPIT', 'Stav',
-    )
-    return name.startswith(binary_prefixes)
-
 
 class AMiTSensor(AMiTEntity, SensorEntity):
     """Representation of an AMiT sensor."""
@@ -73,7 +64,7 @@ class AMiTSensor(AMiTEntity, SensorEntity):
         self._attr_name = variable.name
 
         # Determine device class and unit
-        if self._is_temperature():
+        if is_temperature(variable.name, variable.var_type):
             self._attr_device_class = SensorDeviceClass.TEMPERATURE
             self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
             self._attr_state_class = SensorStateClass.MEASUREMENT
@@ -82,15 +73,7 @@ class AMiTSensor(AMiTEntity, SensorEntity):
 
     def _is_temperature(self) -> bool:
         """Check if this is a temperature sensor."""
-        name = self._variable.name
-        temp_prefixes = ('TE', 'Teoko', 'Trek', 'TTUV', 'TPRIV', 'TVENK', 'pokoj', 'koupl', 'T1p')
-        if name.startswith(temp_prefixes):
-            return True
-        # Generic T prefix for float types, excluding known non-temps
-        if name.startswith('T') and not name.startswith(('Tpr', 'Tlovl', 'test', 'Typ', 'Tim')):
-            if self._variable.var_type == VarType.FLOAT:
-                return True
-        return False
+        return is_temperature(self._variable.name, self._variable.var_type)
 
     @property
     def native_value(self) -> float | int | None:
