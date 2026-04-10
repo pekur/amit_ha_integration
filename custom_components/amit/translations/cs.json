@@ -17,7 +17,8 @@
           "station_addr": "Adresa stanice",
           "client_addr": "Adresa klienta",
           "password": "Heslo",
-          "scan_interval": "Interval aktualizace (sekundy)"
+          "scan_interval": "Interval aktualizace (sekundy)",
+          "target": "Cílový systém"
         }
       },
       "import_select": {
@@ -36,7 +37,8 @@
           "station_addr": "Adresa stanice",
           "client_addr": "Adresa klienta",
           "password": "Heslo",
-          "scan_interval": "Interval aktualizace (sekundy)"
+          "scan_interval": "Interval aktualizace (sekundy)",
+          "target": "Cílový systém"
         }
       },
       "variables": {

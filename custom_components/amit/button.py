@@ -15,7 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers import entity_registry as er
 
 from .entity import get_device_info
-from .heuristics import is_readonly
+from .targets import get_target
 from .const import (
     DOMAIN,
     CONF_HOST,
@@ -23,10 +23,12 @@ from .const import (
     CONF_STATION_ADDR,
     CONF_CLIENT_ADDR,
     CONF_SCAN_INTERVAL,
+    CONF_TARGET,
     DEFAULT_PORT,
     DEFAULT_STATION_ADDR,
     DEFAULT_CLIENT_ADDR,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_TARGET,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -183,11 +185,12 @@ class AMiTReloadButton(ButtonEntity):
         """Handle button press - reload variables from PLC."""
         data = self.hass.data[DOMAIN][self._entry.entry_id]
         client = data["client"]
-        
+        target = get_target(self._entry.data.get(CONF_TARGET, DEFAULT_TARGET))
+
         all_vars = await client.load_variables(
-            is_readonly_fn=is_readonly,
-            wid_min=4000,
-            wid_max=6000,
+            is_readonly_fn=target.is_readonly_fn,
+            wid_min=target.wid_min,
+            wid_max=target.wid_max,
         )
         data["all_variables"] = all_vars
         
