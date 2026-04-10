@@ -6,7 +6,7 @@ Reverse-engineered from AMiT libdbnet2.a
 import struct
 import asyncio
 import logging
-from typing import Tuple, Optional, List, Dict, Any
+from typing import Callable, Tuple, Optional, List, Dict, Any
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -205,11 +205,11 @@ class AMiTClient:
         self._connected = False
         _LOGGER.info("Disconnected from AMiT PLC")
     
-    async def test_connection(self) -> bool:
+    async def test_connection(self, test_wid: int = 4000) -> bool:
         """Test connection by reading a simple value."""
         try:
-            _LOGGER.debug("Testing connection - reading WID 4000...")
-            await self._send_receive(self._create_read_frame(4000, VarType.INT16))
+            _LOGGER.debug(f"Testing connection - reading WID {test_wid}...")
+            await self._send_receive(self._create_read_frame(test_wid, VarType.INT16))
             _LOGGER.debug("Connection test successful")
             return True
         except TimeoutError as e:
@@ -384,8 +384,25 @@ class AMiTClient:
         
         return status in (0x00, 0x08)
     
-    async def load_variables(self, max_variables: int = 1500) -> List[Variable]:
-        """Load variable list from PLC."""
+    async def load_variables(
+        self,
+        max_variables: int = 1500,
+        is_readonly_fn: Optional[Callable[[str], bool]] = None,
+        wid_min: Optional[int] = None,
+        wid_max: Optional[int] = None,
+    ) -> List[Variable]:
+        """Load variable list from PLC.
+
+        Args:
+            max_variables: Upper bound on the number of memory slots to scan.
+            is_readonly_fn: Optional callable ``(name) -> bool`` that returns
+                ``True`` when a variable should be treated as read-only.  When
+                ``None`` all discovered variables are considered writable.
+            wid_min: If provided, only variables with ``wid >= wid_min`` are
+                included.  ``None`` means no lower bound.
+            wid_max: If provided, only variables with ``wid <= wid_max`` are
+                included.  ``None`` means no upper bound.
+        """
         variables = []
         index = 0
         consecutive_failures = 0
@@ -421,14 +438,19 @@ class AMiTClient:
                 else:
                     name = name_bytes.rstrip(b'\x00').decode('latin-1', errors='replace')
                 
-                if name and name[0].isalpha() and 4000 <= wid <= 6000:
+                # Apply WID range filter
+                wid_in_range = (
+                    (wid_min is None or wid >= wid_min)
+                    and (wid_max is None or wid <= wid_max)
+                )
+
+                if name and name[0].isalpha() and wid_in_range:
                     try:
                         var_type = VarType(var_type_code)
                     except ValueError:
                         var_type = VarType.STRUCTURE
                     
-                    # Heuristic for read-only variables
-                    writable = not self._is_readonly_name(name)
+                    writable = not (is_readonly_fn(name) if is_readonly_fn is not None else False)
                     
                     variables.append(Variable(
                         name=name,
@@ -455,23 +477,4 @@ class AMiTClient:
         
         _LOGGER.info(f"Loaded {len(variables)} variables from PLC")
         return sorted(variables, key=lambda v: v.wid)
-    
-    @staticmethod
-    def _is_readonly_name(name: str) -> bool:
-        """Heuristic to determine if variable is read-only based on name."""
-        readonly_prefixes = (
-            'TE',      # Measured temperatures
-            'TEPROST', # Room temperatures  
-            'TEVEN',   # Outdoor temp
-            'TTUV',    # DHW temperature
-            'Trek',    # Recuperation temp
-            'pokoj',   # Room sensors
-            'Por',     # Faults/errors
-            'ALARM',   # Alarms
-            'Stav',    # States
-            'status',  # Status
-            'CO2_',    # CO2 sensors
-            'koupl',   # Bathroom temps
-            'Teoko',   # Circuit temps
-        )
-        return name.startswith(readonly_prefixes)
+

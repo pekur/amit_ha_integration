@@ -17,7 +17,8 @@
           "station_addr": "Station Address",
           "client_addr": "Client Address",
           "password": "Password",
-          "scan_interval": "Scan Interval (seconds)"
+          "scan_interval": "Scan Interval (seconds)",
+          "target": "Target system"
         }
       },
       "import_select": {
@@ -36,7 +37,8 @@
           "station_addr": "Station Address",
           "client_addr": "Client Address",
           "password": "Password",
-          "scan_interval": "Scan Interval (seconds)"
+          "scan_interval": "Scan Interval (seconds)",
+          "target": "Target system"
         }
       },
       "variables": {

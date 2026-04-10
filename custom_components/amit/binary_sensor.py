@@ -5,7 +5,6 @@ import logging
 from typing import Any
 
 from homeassistant.components.binary_sensor import (
-    BinarySensorDeviceClass,
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -14,6 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .entity import AMiTEntity
+from .heuristics import is_binary_state, get_binary_sensor_device_class
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,20 +37,10 @@ async def async_setup_entry(
         # 1. Variable is NOT in writable_wids
         # 2. Variable is INT16 with binary state name
         if variable.wid not in writable_wids:
-            if variable.var_type == VarType.INT16 and _is_binary_state(variable):
+            if variable.var_type == VarType.INT16 and is_binary_state(variable.name):
                 entities.append(AMiTBinarySensor(coordinator, variable, entry))
     
     async_add_entities(entities)
-
-
-def _is_binary_state(variable: Variable) -> bool:
-    """Check if INT16 variable represents a binary state."""
-    name = variable.name
-    binary_prefixes = (
-        'Por', 'ALARM', 'HAVARIE', 'Odtavani', 'Leto', 'TOPIT', 'Stav',
-    )
-    return name.startswith(binary_prefixes)
-
 
 class AMiTBinarySensor(AMiTEntity, BinarySensorEntity):
     """Representation of an AMiT binary sensor."""
@@ -69,12 +59,7 @@ class AMiTBinarySensor(AMiTEntity, BinarySensorEntity):
         self._attr_name = variable.name
 
         # Determine device class
-        if variable.name.startswith(('Por', 'ALARM', 'HAVARIE')):
-            self._attr_device_class = BinarySensorDeviceClass.PROBLEM
-        elif variable.name.startswith('TOPIT'):
-            self._attr_device_class = BinarySensorDeviceClass.HEAT
-        elif variable.name.startswith('Odtavani'):
-            self._attr_device_class = BinarySensorDeviceClass.RUNNING
+        self._attr_device_class = get_binary_sensor_device_class(variable.name)
 
     @property
     def is_on(self) -> bool | None:

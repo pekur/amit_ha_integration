@@ -11,6 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .entity import AMiTEntity
+from .heuristics import is_switch_control
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,24 +36,10 @@ async def async_setup_entry(
         # 1. Variable is in writable_wids (user marked it as writable)
         # 2. Variable is INT16 with switch-like name
         if variable.wid in writable_wids:
-            if variable.var_type == VarType.INT16 and _is_switch_control(variable):
+            if variable.var_type == VarType.INT16 and is_switch_control(variable.name):
                 entities.append(AMiTSwitch(coordinator, client, variable, entry))
     
     async_add_entities(entities)
-
-
-def _is_switch_control(variable: Variable) -> bool:
-    """Check if INT16 variable is an on/off control based on name."""
-    name = variable.name
-    switch_prefixes = (
-        'Zap', 'Povol', 'RUC', 'AUT', 'Blok', 'zapni',
-    )
-    exclude_prefixes = ('ZapodH', 'Zapod_', 'ZapodTL')
-    
-    if name.startswith(exclude_prefixes):
-        return False
-    return name.startswith(switch_prefixes)
-
 
 class AMiTSwitch(AMiTEntity, SwitchEntity):
     """Representation of an AMiT switch."""

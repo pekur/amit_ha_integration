@@ -27,12 +27,15 @@ from .const import (
     CONF_WRITABLE_VARIABLES,
     CONF_CUSTOM_NAMES,
     CONF_CUSTOM_ENTITY_IDS,
+    CONF_TARGET,
     DEFAULT_PORT,
     DEFAULT_STATION_ADDR,
     DEFAULT_CLIENT_ADDR,
     DEFAULT_PASSWORD,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_TARGET,
 )
+from .targets import ALL_TARGETS, get_target
 from .protocol import AMiTClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,6 +45,8 @@ async def validate_connection(hass: HomeAssistant, data: dict[str, Any]) -> dict
     """Validate the user input allows us to connect."""
     _LOGGER.info(f"Validating connection to {data[CONF_HOST]}:{data.get(CONF_PORT, DEFAULT_PORT)}")
     
+    target = get_target(data.get(CONF_TARGET, DEFAULT_TARGET))
+
     client = AMiTClient(
         host=data[CONF_HOST],
         port=data.get(CONF_PORT, DEFAULT_PORT),
@@ -66,7 +71,11 @@ async def validate_connection(hass: HomeAssistant, data: dict[str, Any]) -> dict
         
         _LOGGER.info("Connection test passed, loading variables...")
         
-        variables = await client.load_variables()
+        variables = await client.load_variables(
+            is_readonly_fn=target.is_readonly_fn,
+            wid_min=target.wid_min,
+            wid_max=target.wid_max,
+        )
         
         _LOGGER.info(f"Successfully loaded {len(variables)} variables from PLC")
         
@@ -313,6 +322,15 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(CONF_CLIENT_ADDR, default=self._data.get(CONF_CLIENT_ADDR, DEFAULT_CLIENT_ADDR)): int,
                     vol.Optional(CONF_PASSWORD, default=DEFAULT_PASSWORD): int,
                     vol.Optional(CONF_SCAN_INTERVAL, default=self._data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)): int,
+                    vol.Optional(CONF_TARGET, default=self._data.get(CONF_TARGET, DEFAULT_TARGET)): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(value=t.key, label=t.name)
+                                for t in ALL_TARGETS
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                 }
             ),
             errors=errors,
@@ -351,6 +369,11 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
 
+        target_options = [
+            selector.SelectOptionDict(value=t.key, label=t.name)
+            for t in ALL_TARGETS
+        ]
+
         return self.async_show_form(
             step_id="connection",
             data_schema=vol.Schema(
@@ -361,6 +384,12 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(CONF_CLIENT_ADDR, default=DEFAULT_CLIENT_ADDR): int,
                     vol.Optional(CONF_PASSWORD, default=DEFAULT_PASSWORD): int,
                     vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
+                    vol.Optional(CONF_TARGET, default=DEFAULT_TARGET): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=target_options,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                 }
             ),
             errors=errors,
@@ -494,6 +523,7 @@ class AMiTOptionsFlow(config_entries.OptionsFlow):
         if not self._variables:
             try:
                 data = self.config_entry.data
+                target = get_target(data.get(CONF_TARGET, DEFAULT_TARGET))
                 client = AMiTClient(
                     host=data[CONF_HOST],
                     port=data.get(CONF_PORT, DEFAULT_PORT),
@@ -504,7 +534,11 @@ class AMiTOptionsFlow(config_entries.OptionsFlow):
                 )
                 
                 await client.connect()
-                variables = await client.load_variables()
+                variables = await client.load_variables(
+                    is_readonly_fn=target.is_readonly_fn,
+                    wid_min=target.wid_min,
+                    wid_max=target.wid_max,
+                )
                 await client.disconnect()
                 
                 self._variables = [

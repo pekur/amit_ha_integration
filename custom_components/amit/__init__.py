@@ -24,15 +24,18 @@ from .const import (
     CONF_WRITABLE_VARIABLES,
     CONF_CUSTOM_NAMES,
     CONF_CUSTOM_ENTITY_IDS,
+    CONF_TARGET,
     DEFAULT_PORT,
     DEFAULT_STATION_ADDR,
     DEFAULT_CLIENT_ADDR,
     DEFAULT_PASSWORD,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_TARGET,
     SERVICE_WRITE_VARIABLE,
     SERVICE_RELOAD_VARIABLES,
     PLATFORMS,
 )
+from .targets import get_target
 from .protocol import AMiTClient, Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -157,8 +160,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     await client.connect()
     
+    # Resolve target profile for this config entry
+    target = get_target(entry.data.get(CONF_TARGET, DEFAULT_TARGET))
+
     # Load all variables
-    all_variables = await client.load_variables()
+    all_variables = await client.load_variables(
+        is_readonly_fn=target.is_readonly_fn,
+        wid_min=target.wid_min,
+        wid_max=target.wid_max,
+    )
     
     # Filter to selected variables
     selected_wids = set(int(w) for w in entry.data.get(CONF_VARIABLES, []))
@@ -286,7 +296,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             """Handle reload_variables service call."""
             for eid, entry_data in hass.data[DOMAIN].items():
                 _client = entry_data["client"]
-                all_vars = await _client.load_variables()
+                _entry = hass.config_entries.async_get_entry(eid)
+                _target = get_target(
+                    _entry.data.get(CONF_TARGET, DEFAULT_TARGET) if _entry else DEFAULT_TARGET
+                )
+                all_vars = await _client.load_variables(
+                    is_readonly_fn=_target.is_readonly_fn,
+                    wid_min=_target.wid_min,
+                    wid_max=_target.wid_max,
+                )
                 entry_data["all_variables"] = all_vars
                 _LOGGER.info("Reloaded %d variables from PLC (entry %s)", len(all_vars), eid)
 

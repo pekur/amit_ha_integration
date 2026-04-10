@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .entity import AMiTEntity
+from .heuristics import is_switch_control, is_offset_value, is_temperature_setpoint, is_temperature
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,26 +38,12 @@ async def async_setup_entry(
         # 2. Variable is readable (numeric type)
         # 3. Variable is NOT a switch-like INT16 (those go to switch platform)
         if variable.wid in writable_wids and variable.is_readable():
-            if variable.var_type == VarType.INT16 and _is_switch_control(variable):
+            if variable.var_type == VarType.INT16 and is_switch_control(variable.name):
                 # This goes to switch platform
                 continue
             entities.append(AMiTNumber(coordinator, client, variable, entry))
     
     async_add_entities(entities)
-
-
-def _is_switch_control(variable: Variable) -> bool:
-    """Check if INT16 variable should be a switch (on/off control)."""
-    name = variable.name
-    switch_prefixes = (
-        'Zap', 'Povol', 'RUC', 'AUT', 'Blok', 'zapni',
-    )
-    exclude_prefixes = ('ZapodH', 'Zapod_', 'ZapodTL')
-    
-    if name.startswith(exclude_prefixes):
-        return False
-    return name.startswith(switch_prefixes)
-
 
 class AMiTNumber(AMiTEntity, NumberEntity):
     """Representation of an AMiT number (setpoint or writable value)."""
@@ -78,18 +65,18 @@ class AMiTNumber(AMiTEntity, NumberEntity):
         self._attr_mode = NumberMode.BOX
         
         # Set appropriate min/max based on variable type and name
-        if self._is_offset_value():
+        if is_offset_value(variable.name):
             # Offset/hysteresis values - small range around zero
             self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
             self._attr_native_min_value = -10.0
             self._attr_native_max_value = 10.0
             self._attr_native_step = 0.1
-        elif self._is_temperature_value():
+        elif is_temperature(variable.name, variable.var_type):
             self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
             self._attr_native_min_value = -50.0
             self._attr_native_max_value = 100.0
             self._attr_native_step = 0.1
-        elif self._is_temperature_setpoint():
+        elif is_temperature_setpoint(variable.name):
             self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
             self._attr_native_min_value = 5.0
             self._attr_native_max_value = 35.0
@@ -107,29 +94,6 @@ class AMiTNumber(AMiTEntity, NumberEntity):
             self._attr_native_max_value = 2147483647
             self._attr_native_step = 1
         
-    def _is_offset_value(self) -> bool:
-        """Check if this is an offset/hysteresis value (small range around zero)."""
-        name = self._variable.name
-        # Hposun = offset, Hyst = hysteresis, posun = offset, dT = delta temperature
-        return name.startswith(('Hposun', 'hposun', 'Hyst', 'hyst', 'posun', 'Posun', 'dT', 'delta'))
-
-    def _is_temperature_setpoint(self) -> bool:
-        """Check if this is a temperature setpoint."""
-        name = self._variable.name
-        # Note: Hposun removed - it's handled by _is_offset_value()
-        return name.startswith(('Zad', 'Komf', 'Utl', 'komf', 'utl', 'ZADANA', 'Hmax', 'Hmin'))
-
-    def _is_temperature_value(self) -> bool:
-        """Check if this is a temperature value."""
-        name = self._variable.name
-        temp_prefixes = ('TE', 'Teoko', 'Trek', 'TTUV', 'TPRIV', 'TVENK', 'pokoj', 'koupl', 'T1p')
-        if name.startswith(temp_prefixes):
-            return True
-        if name.startswith('T') and not name.startswith(('Tpr', 'Tlovl', 'test', 'Typ', 'Tim')):
-            if self._variable.var_type == VarType.FLOAT:
-                return True
-        return False
-
     @property
     def native_value(self) -> float | int | None:
         """Return the current value."""
