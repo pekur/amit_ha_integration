@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 
-from .protocol import VarType
+from ..protocol import VarType
 
 # ---------------------------------------------------------------------------
 # Prefix tables (single source of truth)

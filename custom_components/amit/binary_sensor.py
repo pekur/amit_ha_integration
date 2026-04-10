@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .entity import AMiTEntity
-from .heuristics import is_binary_state, get_binary_sensor_device_class
+from .biosuntec.heuristics import is_binary_state, get_binary_sensor_device_class
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)

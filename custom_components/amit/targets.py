@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .heuristics import is_readonly as _biosuntec_is_readonly
+from .biosuntec.heuristics import is_readonly as _biosuntec_is_readonly
 
 
 @dataclass(frozen=True)
