@@ -71,10 +71,6 @@ class AMiTSensor(AMiTEntity, SensorEntity):
         elif variable.var_type == VarType.FLOAT:
             self._attr_state_class = SensorStateClass.MEASUREMENT
 
-    def _is_temperature(self) -> bool:
-        """Check if this is a temperature sensor."""
-        return is_temperature(self._variable.name, self._variable.var_type)
-
     @property
     def native_value(self) -> float | int | None:
         """Return the state of the sensor."""
@@ -83,7 +79,7 @@ class AMiTSensor(AMiTEntity, SensorEntity):
             return None
         
         # Filter out invalid temperature readings (146.19 = disconnected sensor)
-        if self._is_temperature() and isinstance(value, float):
+        if is_temperature(self._variable.name, self._variable.var_type) and isinstance(value, float):
             if value > 100 or value < -50:
                 return None
         

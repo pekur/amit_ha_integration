@@ -54,11 +54,6 @@ _BINARY_STATE_PREFIXES = (
 # These prefixes disqualify a "T…" name from being treated as a temperature
 _TEMPERATURE_T_EXCLUDE = ("Tpr", "Tlovl", "test", "Typ", "Tim")
 
-# Grouping prefixes (used by const.py historically; kept here for reference)
-SETPOINT_PREFIXES = _TEMPERATURE_SETPOINT_PREFIXES
-STATE_PREFIXES = ("Stav", "Por", "ALARM", "status", "Rez", "RV", "Zap", "HAVARIE")
-CONTROL_PREFIXES = ("AUT", "RUC", "Povol", "Blok", "zapni", "Cir", "Rek")
-
 
 # ---------------------------------------------------------------------------
 # Public heuristic functions
