@@ -55,6 +55,7 @@ Native Home Assistant integration for AMiT PLCs (AMiNi, AC4 series) using the DB
 | Client Address | 31 | Your client address |
 | Password | 0 | Numeric password (0 = no password) |
 | Scan Interval | 30 | Polling interval in seconds |
+| Target system | Biosuntec | Variable filtering and classification profile |
 
 6. Select which variables to monitor
 7. Select which variables should be writable (controllable)
@@ -72,16 +73,19 @@ Native Home Assistant integration for AMiT PLCs (AMiNi, AC4 series) using the DB
 
 ## Entity Types
 
-The integration creates entities based on variable naming patterns and user selection:
+The integration creates entities based on variable naming patterns and the writable selection made during configuration. The patterns below apply to the **Biosuntec** target profile; the Generic profile does not restrict variable names.
 
-| Variable Pattern | Entity Type | Description |
-|-----------------|-------------|-------------|
-| `TE*`, `Teoko*`, `pokoj*`, `koupl*`, `TTUV*`, `TVENK*` | Sensor | Temperature readings |
-| `Zad*`, `Komf*`, `Utl*`, `Hyst*`, `TPRIV*` | Number | Temperature setpoints |
-| `Zap*`, `Povol*`, `AUT*` | Switch | On/off controls |
-| `Por*`, `ALARM*`, `Stav*` | Binary Sensor | Alarms and states |
+| Variable Pattern | Writable? | Entity Type | Description |
+|-----------------|-----------|-------------|-------------|
+| `TE*`, `Teoko*`, `Trek*`, `TTUV*`, `TPRIV*`, `TVENK*`, `pokoj*`, `koupl*`, `T1p*`, `T*` (float) | No | Sensor | Temperature readings (°C) |
+| `Zad*`, `Komf*`, `komf*`, `Utl*`, `utl*`, `ZADANA*`, `Hmax*`, `Hmin*` | Yes | Number | Temperature setpoints (°C, 5–35) |
+| `Hposun*`, `hposun*`, `Hyst*`, `hyst*`, `posun*`, `Posun*`, `dT*`, `delta*` | Yes | Number | Offset / hysteresis values (°C, −10–10) |
+| `Zap*`, `Povol*`, `RUC*`, `AUT*`, `Blok*`, `zapni*` | Yes | Switch | On/off controls |
+| `Por*`, `ALARM*`, `HAVARIE*`, `Odtavani*`, `Leto*`, `TOPIT*`, `Stav*` | No | Binary Sensor | Alarms and states |
+| any other readable variable | No | Sensor | Generic numeric sensor |
+| any other readable variable | Yes | Number | Generic adjustable number |
 
-Variables marked as **writable** in configuration will allow control; others are read-only.
+Variables that match a **read-only prefix** (`TE*`, `Por*`, `ALARM*`, `Stav*`, `status*`, `CO2_*`, etc.) are automatically locked as read-only by the Biosuntec profile regardless of the writable selection.
 
 ## Device Buttons
 
@@ -194,6 +198,17 @@ Temperature value ~146.19°C indicates a disconnected sensor. The integration fi
 - Check Home Assistant logs for "Applied X custom entity names" message
 - Verify the WIDs in the backup match the current PLC variables
 
+## Target Profiles
+
+When adding the integration you choose a **Target system** that controls which variables are loaded and how they are classified:
+
+| Profile | Key | WID range | Read-only detection | Description |
+|---------|-----|-----------|---------------------|-------------|
+| **Biosuntec** | `biosuntec` | 4000–6000 | Yes (by name prefix) | Biosuntec HVAC systems (fan coils, floor heating, recuperation, DHW) controlled via AMiT PLC |
+| **Generic AMiT PLC** | `generic` | all | No | Any AMiT DB-Net/IP device without product-specific variable filtering |
+
+The Biosuntec profile automatically marks measurement variables (temperatures, alarms, states, CO₂) as read-only so they cannot accidentally be written to.  Adding a new product type requires only a new profile entry in `targets.py`.
+
 ## Protocol Details
 
 This integration implements the **DB-Net/IP** protocol, which is AMiT's proprietary UDP-based protocol for PLC communication (port 59). The protocol was reverse-engineered from DetStudio software using Wireshark captures.
@@ -221,7 +236,9 @@ config/
 │       ├── __init__.py
 │       ├── config_flow.py
 │       ├── const.py
+│       ├── entity.py
 │       ├── protocol.py
+│       ├── targets.py
 │       ├── sensor.py
 │       ├── number.py
 │       ├── switch.py
@@ -230,6 +247,9 @@ config/
 │       ├── manifest.json
 │       ├── services.yaml
 │       ├── strings.json
+│       ├── biosuntec/
+│       │   ├── __init__.py
+│       │   └── heuristics.py
 │       └── translations/
 │           ├── en.json
 │           └── cs.json
