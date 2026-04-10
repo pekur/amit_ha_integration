@@ -48,8 +48,8 @@ class TargetProfile:
 
 BIOSUNTEC = TargetProfile(
     key="biosuntec",
-    name="Biosuntec HVAC",
-    description="Biosuntec HVAC systems (fan coils, floor heating, recuperation, DHW)",
+    name="Biosuntec",
+    description="Biosuntec systems controlled via AMiT PLC (e.g. HVAC, fan coils, floor heating, recuperation, DHW)",
     is_readonly_fn=_biosuntec_is_readonly,
     wid_min=4000,
     wid_max=6000,
