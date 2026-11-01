@@ -79,6 +79,7 @@ class AMiTExportButton(ButtonEntity):
                 "client_addr": entry.data.get(CONF_CLIENT_ADDR, DEFAULT_CLIENT_ADDR),
             },
             "scan_interval": entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+            CONF_TARGET: entry.data.get(CONF_TARGET, DEFAULT_TARGET),
             "monitored_variables": [],
             "writable_variables": [],
         }

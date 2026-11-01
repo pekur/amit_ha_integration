@@ -174,6 +174,7 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_CLIENT_ADDR: conn.get("client_addr", DEFAULT_CLIENT_ADDR),
                         CONF_PASSWORD: DEFAULT_PASSWORD,  # Password not stored in backup for security
                         CONF_SCAN_INTERVAL: self._import_data.get("scan_interval", DEFAULT_SCAN_INTERVAL),
+                        CONF_TARGET: self._import_data.get(CONF_TARGET, DEFAULT_TARGET),
                     }
                     
                     return await self.async_step_import_confirm()
@@ -192,7 +193,7 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         
         if www_amit_dir.exists():
             backup_files = sorted(
-                [f.name for f in www_amit_dir.glob("amit_export_*.json") | www_amit_dir.glob("amit_*.json")],
+                [f.name for f in www_amit_dir.glob("amit_*.json")],
                 reverse=True  # Newest first
             )
         
@@ -239,6 +240,9 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_CLIENT_ADDR] = user_input.get(CONF_CLIENT_ADDR, DEFAULT_CLIENT_ADDR)
             self._data[CONF_PASSWORD] = user_input.get(CONF_PASSWORD, DEFAULT_PASSWORD)
             self._data[CONF_SCAN_INTERVAL] = user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+            self._data[CONF_TARGET] = user_input.get(
+                CONF_TARGET, self._data.get(CONF_TARGET, DEFAULT_TARGET)
+            )
             
             try:
                 # Test connection
