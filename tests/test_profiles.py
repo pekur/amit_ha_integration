@@ -136,15 +136,45 @@ class ProfileEntityTests(HAStubTestCase):
                     if platform in ("number", "switch"):
                         args.append(client)
                     entity = getattr(self.platforms[platform], class_name)(*args, variable, entry)
-                    expected = {"wid": 0, "variable_name": name, **attributes}
+                    expected = {"wid": 0, **attributes}
                     self.assertEqual(entity.extra_state_attributes, expected)
+                    self.assertEqual(entity.capability_attributes, {"variable_name": name})
                     self.assertEqual(entity._attr_name, name)
                     self.assertEqual(entity._attr_unique_id, f"entry_0{suffix}")
                     entity._attr_name = "Custom entity name"
                     entity.entity_id = f"{platform}.renamed"
                     self.assertEqual(entity.extra_state_attributes, expected)
+                    self.assertEqual(entity.capability_attributes, {"variable_name": name})
                     client.read_variable.assert_not_awaited()
                     client.write_variable.assert_not_awaited()
+
+    async def test_variable_name_capabilities_survive_unavailability_and_keep_platform_attributes(self):
+        cases = [
+            ("sensor", "AMiTSensor", {"state_class": "measurement"}),
+            ("number", "AMiTNumber", {"min": 5, "max": 35, "step": 0.5, "mode": "box"}),
+            ("switch", "AMiTSwitch", None),
+            ("binary_sensor", "AMiTBinarySensor", None),
+        ]
+        for platform, class_name, capabilities in cases:
+            with self.subTest(platform=platform):
+                variable = self.variable("Original", 1)
+                entry = SimpleNamespace(entry_id="entry", data={"host": "plc.invalid"})
+                coordinator = SimpleNamespace(data={1: 12}, last_update_success=True)
+                client = SimpleNamespace(read_variable=AsyncMock(), write_variable=AsyncMock())
+                args = [coordinator]
+                if platform in ("number", "switch"):
+                    args.append(client)
+                entity = getattr(self.platforms[platform], class_name)(*args, variable, entry)
+                entity._attr_capability_attributes = capabilities
+                original = dict(capabilities) if capabilities is not None else None
+                expected = {**(capabilities or {}), "variable_name": "Original"}
+                for available in (True, False, True):
+                    coordinator.last_update_success = available
+                    self.assertEqual(entity.capability_attributes, expected)
+                    self.assertEqual(capabilities, original)
+                    self.assertNotIn("raw_value", entity.capability_attributes)
+                client.read_variable.assert_not_awaited()
+                client.write_variable.assert_not_awaited()
 
 
 class WritableFlowTests(HAStubTestCase):

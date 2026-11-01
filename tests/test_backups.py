@@ -60,6 +60,11 @@ class EntityStub:
     _attr_device_class = None
     _attr_native_unit_of_measurement = None
     _attr_state_class = None
+    _attr_capability_attributes = None
+
+    @property
+    def capability_attributes(self):
+        return self._attr_capability_attributes
 
 
 def module(name, **attributes):

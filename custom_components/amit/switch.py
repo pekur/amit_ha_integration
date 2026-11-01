@@ -96,6 +96,5 @@ class AMiTSwitch(AMiTEntity, SwitchEntity):
         """Return extra state attributes."""
         return {
             "wid": self._variable.wid,
-            "variable_name": self._variable.name,
             "raw_value": self.coordinator.data.get(self._variable.wid),
         }

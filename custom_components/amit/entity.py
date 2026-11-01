@@ -1,6 +1,8 @@
 """Base entity for AMiT integration."""
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -33,3 +35,8 @@ class AMiTEntity(CoordinatorEntity):
         self._entry = entry
         self._rules = get_entity_rules(entry)
         self._attr_device_info = get_device_info(entry)
+
+    @property
+    def capability_attributes(self) -> dict[str, Any]:
+        """Keep the PLC name available when readings are unavailable."""
+        return {**(super().capability_attributes or {}), "variable_name": self._variable.name}
