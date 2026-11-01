@@ -180,6 +180,12 @@ def _refresh_addition_status(hass, operation):
     if entry is None or _configuration_signature(entry) != operation["_configuration"]:
         operation.update(status="failed", error="configuration_changed")
         return
+    if entry.state in (ConfigEntryState.SETUP_RETRY, ConfigEntryState.SETUP_IN_PROGRESS):
+        operation.update(status="pending", error=None)
+        return
+    if entry.state != ConfigEntryState.LOADED:
+        operation.update(status="failed", error="reload_failed")
+        return
     monitor = hass.data.get(DOMAIN, {}).get(operation["entry_id"], {}).get("monitor")
     if monitor is not None and not monitor.closed and monitor.runtime_id != operation["_runtime_id"]:
         operation.update(status="loaded", error=None)

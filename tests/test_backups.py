@@ -92,7 +92,10 @@ class HAStubTestCase(unittest.IsolatedAsyncioTestCase):
         config_entries = module(
             "homeassistant.config_entries", ConfigFlow=FlowStub,
             OptionsFlow=FlowStub, ConfigEntry=SimpleNamespace,
-            ConfigEntryState=SimpleNamespace(SETUP_RETRY="setup_retry"),
+            ConfigEntryState=SimpleNamespace(
+                LOADED="loaded", SETUP_RETRY="setup_retry", SETUP_IN_PROGRESS="setup_in_progress",
+                SETUP_ERROR="setup_error", MIGRATION_ERROR="migration_error", NOT_LOADED="not_loaded",
+                FAILED_UNLOAD="failed_unload"),
         )
         substitutes = {
             package: module(package, __path__=[str(root)]),

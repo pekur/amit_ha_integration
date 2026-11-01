@@ -43,7 +43,8 @@ class WebSocketTests(HAStubTestCase):
     def setUp(self):
         self.variable = self.protocol.Variable("Value", 0, self.protocol.VarType.INT16)
         self.client = SimpleNamespace(read_variable=AsyncMock(), write_variable=AsyncMock())
-        self.entry = SimpleNamespace(title="Test PLC", data={"password": "private-secret"})
+        self.entry = SimpleNamespace(title="Test PLC", data={"password": "private-secret"},
+                                     state=self.websocket.ConfigEntryState.LOADED)
         self.registry_entries = {}
         self.registry_listeners = {}
         self.registry = SimpleNamespace(async_get=self.registry_entries.get)
@@ -449,6 +450,7 @@ class WebSocketTests(HAStubTestCase):
             self.hass, self.client, [self.variable, self.extra], [self.variable, self.extra], 30)
         self.addAsyncCleanup(replacement.async_close)
         self.hass.data["amit"]["first"]["monitor"] = replacement
+        self.entry.state = self.websocket.ConfigEntryState.LOADED
         return True
 
     async def test_confirm_saves_additively_before_reloading_only_the_selected_entry(self):
@@ -597,6 +599,52 @@ class WebSocketTests(HAStubTestCase):
         self.hass.data["amit"]["first"] = {}
         await self.replacement_runtime("first")
         self.assertEqual(self.addition_status(operation, reconnected)["status"], "loaded")
+
+    async def test_retry_does_not_report_loaded_before_entry_setup_finishes(self):
+        message = self.confirmation_setup()
+
+        async def retry(entry_id):
+            self.entry.state = self.websocket.ConfigEntryState.SETUP_RETRY
+            return False
+
+        self.hass.config_entries.async_reload.side_effect = retry
+        operation = self.confirm_addition(message)
+        await asyncio.gather(*self.tasks)
+        self.assertEqual(self.addition_status(operation)["status"], "pending")
+        await self.replacement_runtime("first")
+        for state in (self.websocket.ConfigEntryState.SETUP_IN_PROGRESS,
+                      self.websocket.ConfigEntryState.SETUP_RETRY):
+            with self.subTest(state=state):
+                self.entry.state = state
+                result = self.addition_status(operation)
+                self.assertEqual(result["status"], "pending")
+                self.assertTrue(result["saved"])
+                self.assertIsNone(result["error"])
+        self.entry.state = self.websocket.ConfigEntryState.LOADED
+        self.assertEqual(self.addition_status(operation)["status"], "loaded")
+
+    async def test_retry_reports_terminal_entry_failure_with_or_without_a_new_monitor(self):
+        message = self.confirmation_setup()
+        operation = self.confirm_addition(message)
+        await asyncio.gather(*self.tasks)
+        baseline = dict(self.hass.data[self.websocket.MONITOR_ADDITIONS]["first"])
+        await self.replacement_runtime("first")
+        replacement = self.hass.data["amit"]["first"]["monitor"]
+        for has_monitor in (False, True):
+            for state in (self.websocket.ConfigEntryState.SETUP_ERROR,
+                          self.websocket.ConfigEntryState.MIGRATION_ERROR,
+                          self.websocket.ConfigEntryState.NOT_LOADED,
+                          self.websocket.ConfigEntryState.FAILED_UNLOAD):
+                with self.subTest(state=state, has_monitor=has_monitor):
+                    self.hass.data[self.websocket.MONITOR_ADDITIONS]["first"] = dict(baseline)
+                    self.hass.data["amit"]["first"]["monitor"] = replacement if has_monitor else None
+                    self.entry.state = state
+                    result = self.addition_status(operation)
+                    self.assertEqual(result["status"], "failed")
+                    self.assertEqual(result["error"], "reload_failed")
+                    self.assertTrue(result["saved"])
+                    self.assertEqual(self.entry.data["variables"], ["0", "1"])
+        self.client.write_variable.assert_not_awaited()
 
     async def test_status_does_not_claim_success_after_another_configuration_change(self):
         message = self.confirmation_setup()
