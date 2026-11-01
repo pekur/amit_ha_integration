@@ -15,6 +15,7 @@ Native Home Assistant integration for AMiT PLCs (AMiNi, AC4 series) using the DB
 - ⚠️ **Binary sensors** - Monitor alarms and states
 - 💾 **Export/Import** - Backup and restore configuration including custom entity names
 - 🔄 **Reload button** - Reload variables from PLC without restarting
+- 📈 **Live variable monitor** - Browse discovered values and plot selected variables with temporary, in-memory history
 - 📝 **Service calls** - Write any variable value programmatically
 - ⚙️ **Options flow** - Reconfigure variables without removing the integration
 - 🇨🇿 **Czech language support** - Full localization
@@ -90,6 +91,37 @@ Variables that match a **read-only prefix** (`TE*`, `Por*`, `ALARM*`, `Stav*`, `
 The **Generic** profile creates plain numeric sensors and number controls, without Biosuntec naming rules, temperature units, switches, or binary sensors. Existing Generic entities previously classified as switches or binary sensors will be replaced by number or sensor entities; update automations using those entity IDs. Biosuntec and configurations without a profile retain their existing classification and identifier formats.
 
 Read-only variables are excluded from the writable selection. Older selections and imported backups cannot override the current profile's read-only policy; those variables remain monitored.
+
+## Live Variable Monitor
+
+Open **AMiT Monitor** in the Home Assistant sidebar with an administrator account. The panel appears when at least one AMiT entry is loaded and the Home Assistant frontend is enabled. It supports Czech and English, follows the active theme, and adapts to mobile screens.
+
+1. Choose the PLC in the header.
+2. Search by variable name or WID, or filter by type.
+3. Select variables to start recording new readings in their graphs.
+4. Use the graph pointer or sample slider to inspect an actual reading and its time. The slider also supports keyboard navigation.
+
+The table includes all variables discovered by the selected target profile, including variables without Home Assistant entities. It reads Int16, Int32, and Float values. Arrays, time arrays, and structures remain listed as unsupported for reading. The table shows 50 rows per page; the graph area shows four selected variables per page. Other selected variables continue recording while their graphs are on another page.
+
+Values are raw decoded PLC readings. Units come from the target profile where available. Entity-specific filtering is not applied: for example, a temperature value that an existing sensor treats as unavailable can still appear in the monitor. Failed or invalid readings create gaps in graphs instead of zeros. Each reading carries its own timestamp; an old value is not presented as a new measurement.
+
+### Temporary history
+
+- History starts with the next new reading after selection. Initial snapshots update the table without adding old readings to a graph.
+- History stays only in the open panel's memory. The monitor does not create entities or save readings to Recorder, files, or browser storage. Existing entities retain their normal Home Assistant history behavior.
+- The limit is **2,000 samples per variable and 50,000 samples in total**. The oldest samples are removed when a limit is reached.
+- Deselecting a variable clears its series. **Clear history** removes recorded samples while keeping the current selection and latest table values.
+- Leaving the monitor, reloading the page, changing PLC, or destroying the panel clears its history and selection.
+- **Pause** and a hidden browser tab stop the panel's live subscription. Existing integration polling continues. Returning to the monitor keeps the available in-memory history and starts a new graph segment. Home Assistant can destroy a suspended panel; a recreated panel starts a new session.
+- A connection interruption keeps existing graph samples. Reconnection updates the table from a snapshot and resumes recording new samples without filling the missed interval.
+
+The panel is read-only. It shares ordinary polling results and uses one additional reader per PLC for other readable variables while viewers are connected. Extra reads run sequentially, with at least 0.2 seconds between requests and a delay after transport errors. Large catalogs and slow PLC replies can make a full scan longer than the configured interval. Check each value's reading time and age. Opening several panels does not multiply the extra PLC reads.
+
+### Monitor troubleshooting
+
+- If the panel is missing, check administrator access, frontend availability, and whether an AMiT entry has finished loading.
+- If a PLC is unavailable, the monitor keeps that selection instead of switching to another device. Use **Refresh PLC list** after the entry recovers, or select another PLC explicitly.
+- After an integration update, reload the browser page to load the current panel code. This clears the temporary session.
 
 ## Device Buttons
 
@@ -242,6 +274,11 @@ config/
 │       ├── const.py
 │       ├── entity.py
 │       ├── protocol.py
+│       ├── monitor.py
+│       ├── websocket.py
+│       ├── frontend.py
+│       ├── frontend/
+│       │   └── monitor.js
 │       ├── targets.py
 │       ├── sensor.py
 │       ├── number.py
@@ -263,6 +300,26 @@ config/
 ```
 
 ## Contributing
+
+Offline backend tests use Python's standard test runner:
+
+```sh
+python -B -m unittest discover -s tests -q
+```
+
+History and number-formatting tests use Node.js without additional packages:
+
+```sh
+node --test tests/test_monitor_frontend.mjs
+```
+
+With Playwright and Chromium available in the development environment, run the browser scenarios:
+
+```sh
+node tests/test_monitor_ui.cjs
+```
+
+The browser runner accepts `AMIT_PLAYWRIGHT_MODULE` and `AMIT_CHROME_PATH` for existing installations in non-default locations. It uses a simulated Home Assistant connection and does not contact a PLC. Screenshots are written only when `AMIT_SCREENSHOT_DIR` is set; these contain simulated data.
 
 Contributions are welcome! Please:
 1. Fork the repository
