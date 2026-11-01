@@ -1,10 +1,10 @@
 {
   "domain": "amit",
   "name": "AMiT PLC",
+  "after_dependencies": ["frontend", "http"],
   "codeowners": ["@pekur"],
   "config_flow": true,
   "dependencies": [],
-  "after_dependencies": ["frontend", "http"],
   "documentation": "https://github.com/pekur/amit_ha_integration",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/pekur/amit_ha_integration/issues",
