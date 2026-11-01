@@ -96,6 +96,37 @@ async function run() {
   try {
     {
       const { page, errors, requests } = await mount(browser);
+      const original = await page.locator("amit-monitor-panel tbody .name").allTextContents();
+      await page.getByRole("searchbox").fill("TE_venkovni");
+      await page.waitForFunction(() => panel.shadowRoot.querySelectorAll("tbody tr").length === 1);
+      await page.evaluate(() => { window.retainedRow = panel.shadowRoot.querySelector("tbody tr"); });
+      await page.getByRole("searchbox").fill("");
+      await page.waitForFunction(() => panel.shadowRoot.querySelectorAll("tbody tr").length === 7);
+      const restored = await page.locator("amit-monitor-panel tbody .name").allTextContents();
+      await select(page, "TE_obyvak");
+      await page.evaluate(() => {
+        fixture.emit(fixture.reading(4101, .049)); fixture.emit(fixture.reading(4101, .0495));
+      });
+      await page.waitForFunction(() => panel.shadowRoot.querySelector(".chart path"));
+      const labels = await page.locator('amit-monitor-panel .chart svg text[text-anchor="end"][x="58"]').allTextContents();
+      assert.deepEqual({ order: restored, distinctLabels: new Set(labels).size },
+        { order: original, distinctLabels: 3 }, "Search reset must restore catalog order and small Float ticks must differ");
+      assert.equal(await page.evaluate(() => panel._rows.get(4102).row === retainedRow), true);
+      const checkbox = page.getByRole("checkbox", { name: "Vybráno: TE_venkovni", exact: true });
+      await checkbox.focus();
+      await page.waitForTimeout(1100);
+      assert.equal(await checkbox.evaluate(e => e.getRootNode().activeElement === e), true);
+      await page.getByRole("combobox", { name: "Typ proměnné", exact: true }).selectOption("Long");
+      await page.waitForFunction(() => panel.shadowRoot.querySelectorAll("tbody tr").length === 1);
+      await page.getByRole("combobox", { name: "Typ proměnné", exact: true }).selectOption("all");
+      await page.waitForFunction(() => panel.shadowRoot.querySelectorAll("tbody tr").length === 7);
+      assert.deepEqual(await page.locator("amit-monitor-panel tbody .name").allTextContents(), original);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("distinct small Float axis labels; catalog order and retained row focus after resetting search/type filters");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser);
       assert.equal(await page.locator("amit-monitor-panel tbody tr").count(), 7);
       assert.equal(await page.locator("amit-monitor-panel img").count(), 0);
       assert.equal(await page.evaluate(() => window.injected), undefined);

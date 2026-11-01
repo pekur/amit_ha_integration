@@ -8,7 +8,7 @@ import test from "node:test";
 globalThis.HTMLElement = class {};
 globalThis.customElements = { get: () => true };
 const source = await readFile(new URL("../custom_components/amit/frontend/monitor.js", import.meta.url), "utf8");
-const { MonitorHistory, TRANSLATIONS } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const { MonitorHistory, TRANSLATIONS, AMiTMonitorPanel } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 
 const variable = (wid = 1, revision = 1, readable = true) => ({ wid, revision, readable, type: "Float", name: `Value ${wid}` });
 const reading = (sequence, wid = 1, value = sequence, revision = 1) => ({
@@ -122,4 +122,25 @@ test("malformed, obsolete and unknown samples cannot enter history", () => {
 test("Czech and English translations contain the same nonempty keys", () => {
   assert.deepEqual(Object.keys(TRANSLATIONS.cs).sort(), Object.keys(TRANSLATIONS.en).sort());
   for (const messages of Object.values(TRANSLATIONS)) assert.ok(Object.values(messages).every(v => typeof v === "string" && v.length));
+});
+
+test("axis precision distinguishes small, negative, and narrowly spaced ticks", () => {
+  const ranges = [[.048505, .049995], [-.049995, -.048505], [-.0001, .0001],
+    [1e6, 1e6 + 1], [1e-38, 1.1e-38], [-3.4e38, -3e38], [0, 1]];
+  for (const language of ["cs", "en"]) {
+    for (const [min, max] of ranges) {
+      const labels = AMiTMonitorPanel.prototype._axisLabels.call({ _lang: language }, min, max);
+      assert.equal(labels.length, 3);
+      assert.equal(new Set(labels).size, 3, `${language} scale ${min} to ${max}: ${labels}`);
+    }
+    const labels = AMiTMonitorPanel.prototype._axisLabels.call({ _lang: language }, .048505, .049995);
+    assert.ok(labels.some(label => label.includes(language === "cs" ? "0,049" : "0.049")));
+  }
+});
+
+test("adaptive axis labels do not change displayed reading precision", () => {
+  const format = value => AMiTMonitorPanel.prototype._format.call({ _lang: "en" }, value);
+  assert.equal(format(.0495), "0.0495");
+  assert.equal(format(2147483647), "2,147,483,647");
+  assert.equal(format(-2147483648), "-2,147,483,648");
 });

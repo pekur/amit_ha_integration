@@ -440,14 +440,27 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._renderTimer = setTimeout(() => { this._renderTimer = null; this._render(); }, 100);
   }
 
-  _format(value, axis = false) {
+  _format(value) {
     if (!Number.isFinite(value)) return "—";
     const magnitude = Math.abs(value);
-    const scientific = magnitude >= (axis ? 1e6 : 1e12) || (magnitude > 0 && magnitude < (axis ? .01 : .00001));
-    const format = scientific ? { notation: "scientific", maximumSignificantDigits: axis ? 3 : 9 } :
-      !axis && Number.isInteger(value) ? { maximumFractionDigits: 0 } :
-      axis ? { maximumFractionDigits: 2 } : { maximumSignificantDigits: 9 };
+    const scientific = magnitude >= 1e12 || (magnitude > 0 && magnitude < .00001);
+    const format = scientific ? { notation: "scientific", maximumSignificantDigits: 9 } :
+      Number.isInteger(value) ? { maximumFractionDigits: 0 } : { maximumSignificantDigits: 9 };
     return new Intl.NumberFormat(this._lang, format).format(value);
+  }
+
+  _axisLabels(min, max) {
+    const values = [max, max - (max - min) / 2, min];
+    const magnitude = Math.max(Math.abs(min), Math.abs(max));
+    const notation = magnitude >= 1e6 || (magnitude > 0 && magnitude < .01) ? "scientific" : "standard";
+    let labels;
+    // Select precision for the whole scale, keeping each distinct tick legible.
+    for (let precision = 3; precision <= 17; precision++) {
+      const format = new Intl.NumberFormat(this._lang, { notation, maximumSignificantDigits: precision });
+      labels = values.map(value => format.format(value));
+      if (new Set(labels).size === values.length) break;
+    }
+    return labels;
   }
 
   _time(timestamp) {
@@ -516,6 +529,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     const visible = variables.slice(this._tablePage * 50, (this._tablePage + 1) * 50);
     const keep = new Set(visible.map(v => v.wid));
     for (const [wid, entry] of this._rows) if (!keep.has(wid)) { entry.row.remove(); this._rows.delete(wid); }
+    let nextRow = this._tbody.firstChild;
     for (const variable of visible) {
       let entry = this._rows.get(variable.wid);
       if (!entry) {
@@ -529,8 +543,9 @@ export class AMiTMonitorPanel extends HTMLElement {
         valueCell.append(value, reading, last); row.append(checkCell, nameCell, valueCell);
         entry = { row, checkbox, name, metadata, value, reading, last };
         this._rows.set(variable.wid, entry);
-        this._tbody.append(row);
       }
+      if (entry.row !== nextRow) this._tbody.insertBefore(entry.row, nextRow);
+      nextRow = entry.row.nextSibling;
       entry.checkbox.checked = this.model.selected.has(variable.wid);
       entry.checkbox.disabled = !variable.readable;
       entry.checkbox.setAttribute("aria-label", `${this._t("selected")}: ${variable.name}`);
@@ -630,10 +645,11 @@ export class AMiTMonitorPanel extends HTMLElement {
     const x = time => left + (right - left) * (time - start) / span;
     const y = value => bottom - (bottom - top) * (value - min) / (max - min);
     chart.xToTime = pixel => start + (pixel - left) / (right - left) * span;
+    const labels = this._axisLabels(min, max);
     for (let i = 0; i < 3; i++) {
       const yy = top + (bottom - top) * i / 2;
       svgNode("line", { x1: left, x2: right, y1: yy, y2: yy, stroke: "var(--divider-color,#dce4eb)" });
-      svgNode("text", { x: left - 6, y: yy + 4, "text-anchor": "end" }, this._format(max - (max - min) * i / 2, true));
+      svgNode("text", { x: left - 6, y: yy + 4, "text-anchor": "end" }, labels[i]);
     }
     svgNode("text", { x: left, y: 13 }, variable.unit || this._t("measurement"));
     const ticks = first === last ? [first] : width < 290 ? [first, last] : [first, (first + last) / 2, last];
