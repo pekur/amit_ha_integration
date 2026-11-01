@@ -402,27 +402,48 @@ class AMiTClient:
                 included.  ``None`` means no lower bound.
             wid_max: If provided, only variables with ``wid <= wid_max`` are
                 included.  ``None`` means no upper bound.
+
+        Raises:
+            ConnectionError: The client is disconnected or communication fails
+                and a previously readable catalog slot cannot be read again.
         """
+        if not self.connected:
+            raise ConnectionError("Not connected to PLC")
+
         variables = []
         index = 0
         consecutive_failures = 0
         max_failures = 10
+        last_error = None
+        last_valid_index = None
+        recovery_point = None
+        recovery_attempted = False
+        recovery_error = None
+        recovery_incomplete = False
         
         _LOGGER.info("Loading variable list from PLC...")
         
-        while consecutive_failures < max_failures and index < max_variables:
+        while True:
+            if consecutive_failures >= max_failures or index >= max_variables:
+                if recovery_point is None or recovery_attempted or last_valid_index is None:
+                    break
+                # Retry the interrupted range once, including any skipped slots.
+                # Discard its first-pass results to avoid duplicates or stale data.
+                index, variable_count, last_valid_index = recovery_point
+                del variables[variable_count:]
+                consecutive_failures = 0
+                last_error = None
+                recovery_attempted = True
+
             try:
                 frame = self._create_read_memory_frame(0xFFFD0000 + index, 26)
                 response = await self._send_receive(frame)
-                
+                last_error = None
                 if len(response) < 10 or response[0] != 0x68:
                     consecutive_failures += 1
                     index += 1
                     continue
-                
-                frame_len = response[1]
-                data = response[8:4+frame_len]
-                
+                data = response[8:4+response[1]]
                 if len(data) < 22:
                     consecutive_failures += 1
                     index += 1
@@ -444,7 +465,17 @@ class AMiTClient:
                     and (wid_max is None or wid <= wid_max)
                 )
 
-                if name and name[0].isalpha() and wid_in_range:
+                if name and name[0].isalpha():
+                    if recovery_attempted and recovery_error is not None:
+                        recovery_incomplete = True
+                    # A valid catalog slot is not a failure when filtered out.
+                    consecutive_failures = 0
+                    last_valid_index = index
+                    if not wid_in_range:
+                        index += 1
+                        await asyncio.sleep(0.001)
+                        continue
+
                     try:
                         var_type = VarType(var_type_code)
                     except ValueError:
@@ -465,16 +496,42 @@ class AMiTClient:
                 else:
                     consecutive_failures += 1
                 
-            except TimeoutError:
+            except TimeoutError as e:
                 _LOGGER.debug(f"Timeout reading variable at index {index}")
                 consecutive_failures += 1
+                last_error = e
             except Exception as e:
                 _LOGGER.debug(f"Error reading variable at index {index}: {e}")
                 consecutive_failures += 1
+                last_error = e
             
+            if last_error is not None and recovery_point is None:
+                recovery_point = (index, len(variables), last_valid_index)
+            if last_error is not None and recovery_attempted:
+                recovery_error = last_error
             index += 1
             await asyncio.sleep(0.001)  # 1ms delay between reads
         
+        if recovery_incomplete:
+            raise ConnectionError("Variable catalog still contains unread slots") from recovery_error
+
+        if last_error is not None:
+            # Some devices may stop responding beyond the end of the catalog.
+            # Re-read a known slot to distinguish that from losing the PLC.
+            if last_valid_index is None:
+                raise ConnectionError("Failed to load variable catalog from PLC") from last_error
+            try:
+                response = await self._send_receive(
+                    self._create_read_memory_frame(0xFFFD0000 + last_valid_index, 26)
+                )
+                if (
+                    len(response) < 10 or response[0] != 0x68
+                    or len(response[8:4 + response[1]]) < 22
+                ):
+                    raise ValueError("Invalid catalog probe response")
+            except Exception as err:
+                raise ConnectionError("Failed to load variable catalog from PLC") from err
+
         _LOGGER.info(f"Loaded {len(variables)} variables from PLC")
         return sorted(variables, key=lambda v: v.wid)
 
