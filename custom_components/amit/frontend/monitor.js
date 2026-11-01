@@ -21,6 +21,25 @@ export const TRANSLATIONS = {
     haFilter: "Home Assistant entities", allVariables: "All variables", withEntity: "With HA entity",
     disabledEntity: "Disabled", configuredOnly: "Selected in HA configuration · no entity",
     plcVariable: "PLC variable",
+    addEntities: "Add selected as HA entities", addTitle: "Add variables to Home Assistant",
+    addScope: "All selected variables are included, including those hidden by filters or on other pages.",
+    addPreviewing: "Preparing preview…", addConfirm: "Save and load entities", cancel: "Cancel", close: "Close",
+    addSelected: "Selected variables", addNew: "Added to configuration", addMonitored: "Newly monitored after reload",
+    addExisting: "Already in configuration", addAll: "This device uses all readable variables. That setting stays enabled; reloading can add other variables shown below.",
+    addReadOnly: "New variables are added for reading. Existing valid write permissions are preserved. No control values are written to the PLC.",
+    addRemovedWrites: "Invalid write permissions to remove", addHistory: "Reloading clears the temporary monitor history. New entities use Home Assistant's normal history settings.",
+    addConfirming: "Saving the selection…", addSaved: "Selection saved. Waiting for reload…",
+    addReloading: "Selection saved. Loading entities…", addPending: "Selection saved. Home Assistant is waiting to retry loading the device.",
+    addLoaded: "Selection saved and the device loaded successfully.", addUnchanged: "The selected variables are already configured. No reload is needed.",
+    addFailed: "Selection saved, but loading failed. Check the integration in Home Assistant settings.",
+    addStale: "The selection, device or entity information changed. Prepare a new preview.",
+    addPreviewError: "Unable to prepare the preview. Refresh the PLC list and try again.",
+    addSaveError: "The selection was not saved. Prepare a new preview and try again.",
+    addBusy: "Another saved change is still loading. Wait for it to finish, then prepare a new preview.",
+    addUnknown: "The confirmation result could not be verified. The selection may have been saved. Refresh the PLC list and prepare a new preview.",
+    addStatusError: "Unable to check the saved change. The status will be checked again when the connection is available.",
+    addRetry: "Prepare new preview", addDetails: "View details",
+    addPreviewReady: "Check the preview before saving the selection.",
   },
   cs: {
     title: "AMiT Monitor", plc: "PLC", variables: "Proměnné", trends: "Sledování v čase",
@@ -43,6 +62,25 @@ export const TRANSLATIONS = {
     haFilter: "Entity Home Assistantu", allVariables: "Všechny proměnné", withEntity: "S HA entitou",
     disabledEntity: "Zakázaná", configuredOnly: "Vybraná v konfiguraci HA · bez entity",
     plcVariable: "Proměnná PLC",
+    addEntities: "Přidat vybrané jako HA entity", addTitle: "Přidat proměnné do Home Assistantu",
+    addScope: "Zahrnuty jsou všechny vybrané proměnné, i ty skryté filtrem nebo na jiné stránce.",
+    addPreviewing: "Připravuji náhled…", addConfirm: "Uložit a načíst entity", cancel: "Zrušit", close: "Zavřít",
+    addSelected: "Vybrané proměnné", addNew: "Doplnění konfigurace", addMonitored: "Nově sledované po načtení",
+    addExisting: "Již v konfiguraci", addAll: "Zařízení používá všechny čitelné proměnné. Toto nastavení zůstane zachováno; načtení může přidat i další níže uvedené proměnné.",
+    addReadOnly: "Nové proměnné se přidají pro čtení. Stávající platná oprávnění k zápisu zůstanou zachována. Do PLC se nezapisují žádné řídicí hodnoty.",
+    addRemovedWrites: "Neplatná oprávnění k zápisu k odebrání", addHistory: "Opětovné načtení vymaže dočasnou historii monitoru. Nové entity podléhají běžnému nastavení historie Home Assistantu.",
+    addConfirming: "Ukládám výběr…", addSaved: "Výběr uložen. Čeká se na opětovné načtení…",
+    addReloading: "Výběr uložen. Načítám entity…", addPending: "Výběr uložen. Home Assistant čeká na další pokus o načtení zařízení.",
+    addLoaded: "Výběr uložen a zařízení úspěšně načteno.", addUnchanged: "Vybrané proměnné už jsou nastavené. Opětovné načtení není potřeba.",
+    addFailed: "Výběr uložen, ale načtení selhalo. Zkontrolujte integraci v nastavení Home Assistantu.",
+    addStale: "Výběr, zařízení nebo informace o entitách se změnily. Připravte nový náhled.",
+    addPreviewError: "Náhled se nepodařilo připravit. Obnovte seznam PLC a zkuste to znovu.",
+    addSaveError: "Výběr nebyl uložen. Připravte nový náhled a zkuste to znovu.",
+    addBusy: "Jiná uložená změna se ještě načítá. Počkejte na dokončení a připravte nový náhled.",
+    addUnknown: "Výsledek potvrzení nelze ověřit. Výběr mohl být uložen. Obnovte seznam PLC a připravte nový náhled.",
+    addStatusError: "Stav uložené změny se nepodařilo ověřit. Po obnovení spojení jej zkusíme načíst znovu.",
+    addRetry: "Připravit nový náhled", addDetails: "Zobrazit podrobnosti",
+    addPreviewReady: "Před uložením výběru zkontrolujte náhled.",
   },
 };
 
@@ -184,6 +222,8 @@ button,input,select{font:inherit;color:inherit}button,select,input[type=search]{
 table{width:100%;border-collapse:collapse}th{text-align:left;font-size:12px;font-weight:400;color:var(--secondary-text-color,#526775);background:var(--primary-background-color,#f5f7fa);padding:9px 10px}td{border-top:1px solid var(--divider-color,#dce4eb);padding:12px 10px;vertical-align:middle}td:first-child,th:first-child{width:42px;padding:0}td:first-child label{display:flex;align-items:center;justify-content:center;min-height:44px;min-width:42px}td:last-child,th:last-child{text-align:right}.name{display:block;overflow-wrap:anywhere;font-weight:500}.value{white-space:nowrap}input[type=checkbox]{width:18px;height:18px;accent-color:var(--primary-color,#007eaa)}tr.selected{background:color-mix(in srgb,var(--primary-color,#007eaa) 9%,var(--card-background-color,#fff))}.error{color:var(--error-color,#a12836)}.changed .value{animation:changed 1s ease-out}@keyframes changed{from{background:color-mix(in srgb,var(--primary-color,#007eaa) 25%,transparent)}to{background:transparent}}
 .foot{padding:12px 16px;border-top:1px solid var(--divider-color,#dce4eb);color:var(--secondary-text-color,#526775);font-size:12px}.plots{padding:0 16px 12px}.chart{border-top:1px solid var(--divider-color,#dce4eb);padding-top:14px;margin-bottom:16px}.chart-head{justify-content:space-between}.chart-name{display:flex;align-items:center;gap:7px;min-width:0;overflow-wrap:anywhere}.swatch{width:18px;height:3px;background:var(--series);flex-shrink:0}.chart svg{display:block;width:100%;height:190px;touch-action:pan-y}.chart svg text{fill:var(--secondary-text-color,#526775);font:12px system-ui,sans-serif}.chart-detail{min-height:36px;font-size:12px;color:var(--secondary-text-color,#526775);overflow-wrap:anywhere}.sample-control{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--secondary-text-color,#526775)}.sample-control input{min-width:0;flex:1;accent-color:var(--primary-color,#007eaa)}.empty{padding:24px 16px;color:var(--secondary-text-color,#526775);text-align:center}.notice{padding:0 20px 20px;font-size:12px;color:var(--secondary-text-color,#526775)}.status{display:flex;align-items:center;gap:6px}.status-dot{width:8px;height:8px;border-radius:50%;background:var(--primary-color,#007eaa)}.status[data-offline=true] .status-dot{background:var(--disabled-text-color,#888)}.limit{padding:0 16px 12px;font-size:12px;color:var(--secondary-text-color,#526775)}[hidden]{display:none!important}
 .identity,.entity-info{display:block;overflow-wrap:anywhere}.chart-name{flex:1}
+.addition-status{margin:16px 20px 0;padding:14px 16px;border:1px solid var(--divider-color,#dce4eb);border-radius:10px;background:var(--card-background-color,#fff);display:flex;align-items:center;justify-content:space-between;gap:12px;overflow-wrap:anywhere}.primary{background:color-mix(in srgb,var(--primary-color,#007eaa) 18%,var(--card-background-color,#fff));border-color:var(--primary-color,#007eaa);font-weight:500}button.primary:hover{background:color-mix(in srgb,var(--primary-color,#007eaa) 25%,var(--card-background-color,#fff))}
+dialog{color:inherit;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#dce4eb);border-radius:14px;padding:20px;width:min(640px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;box-shadow:0 16px 64px #0005}dialog::backdrop{background:#0007}dialog h2{font-size:20px}dialog .dialog-body{display:grid;gap:12px;margin:12px 0}dialog .dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}.addition-list{max-height:30vh;overflow:auto;border:1px solid var(--divider-color,#dce4eb);border-radius:8px}.addition-item{padding:9px 12px;overflow-wrap:anywhere}.addition-item+.addition-item{border-top:1px solid var(--divider-color,#dce4eb)}.addition-warning{padding:10px 12px;background:var(--secondary-background-color,var(--primary-background-color,#eef3f7));border-radius:8px}
 :host([compact]) .columns{grid-template-columns:minmax(0,1fr)}
 @media(max-width:600px){header{padding:14px}.columns{padding:14px;gap:14px;grid-template-columns:minmax(0,1fr)}.notice{padding:0 14px 18px}button{min-height:44px}select,input[type=search]{font-size:16px}h1{font-size:20px}}
 @media(prefers-reduced-motion:reduce){.changed .value{animation:none}}
@@ -219,10 +259,12 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._unavailable = false;
     this._loading = false;
     this._pageAway = false;
+    this._addition = null;
     this._visibility = () => {
       this.model.breakSeries();
       if (document.hidden) this._stopSubscription();
       else this._sync();
+      if (document.hidden) this._stopAdditionPoll(); else this._pollAddition();
       this._scheduleRender();
     };
     this._pageHide = () => { this._pageAway = true; this._endSession(); };
@@ -232,9 +274,11 @@ export class AMiTMonitorPanel extends HTMLElement {
       this._loading = false;
       this.model.breakSeries();
       this._stopSubscription();
+      this._invalidateAddition();
+      this._stopAdditionPoll();
       this._scheduleRender();
     };
-    this._ready = () => { this._subscriptionFailed = false; this._loadEntries(); };
+    this._ready = () => { this._subscriptionFailed = false; this._loadEntries(); this._pollAddition(); };
   }
 
   set hass(hass) {
@@ -278,6 +322,7 @@ export class AMiTMonitorPanel extends HTMLElement {
   }
 
   _endSession() {
+    this._resetAddition();
     this._stopSubscription();
     this._listToken++;
     this._loading = false;
@@ -312,9 +357,12 @@ export class AMiTMonitorPanel extends HTMLElement {
     connection.addEventListener("ready", this._ready);
     this._subscriptionFailed = false;
     this._loadEntries();
+    this._pollAddition();
   }
 
   _unbindConnection() {
+    this._invalidateAddition();
+    this._stopAdditionPoll();
     this._stopSubscription();
     this._listToken++;
     this._loading = false;
@@ -374,8 +422,10 @@ export class AMiTMonitorPanel extends HTMLElement {
       if (token !== this._token || !this.isConnected || this._paused || document.hidden) return;
       if (event.kind === "snapshot" || event.kind === "catalog") {
         this.model.snapshot(event);
+        this._checkAddition();
       } else if (event.kind === "entity_metadata") {
         this.model.entityMetadata(event);
+        this._checkAddition();
       } else if (event.kind === "sample") {
         const previous = this.model.latest.get(event.sample.wid);
         if (this.model.sample(event) && previous?.value !== event.sample.value) {
@@ -383,6 +433,7 @@ export class AMiTMonitorPanel extends HTMLElement {
           if (row) { row.classList.remove("changed"); void row.offsetWidth; row.classList.add("changed"); }
         }
       } else if (event.kind === "unavailable") {
+        this._invalidateAddition();
         this._unavailable = true;
         this.model.breakSeries();
         this._stopSubscription();
@@ -415,14 +466,16 @@ export class AMiTMonitorPanel extends HTMLElement {
       <span class="status" role="status"><span class="status-dot"></span><span class="status-text"></span></span>
       <button type="button" class="refresh" data-label="refresh"><ha-icon icon="mdi:refresh"></ha-icon></button>
       <span class="last-read muted small"></span></div></header>
+      <div class="addition-status" hidden><span role="status" aria-live="polite"></span><button type="button" class="addition-details" data-text="addDetails"></button></div>
       <div class="columns"><section class="section"><div class="section-head"><h2 data-text="variables"></h2><span class="count muted small"></span></div>
       <div class="tools"><input type="search" data-label="search"><select class="filter" data-label="type"></select><select class="ha-filter" data-label="haFilter"></select></div>
       <table><thead><tr><th><span aria-hidden="true">✓</span></th><th data-text="variable" scope="col"></th><th data-text="value" scope="col"></th></tr></thead><tbody></tbody></table>
       <div class="table-empty empty" data-text="empty" hidden></div><div class="table-pager pager"></div><div class="foot" data-text="raw"></div></section>
       <section class="section"><div class="section-head"><h2 data-text="trends"></h2><span class="selection muted small" aria-live="polite"></span></div>
-      <div class="actions"><button class="pause" type="button" aria-pressed="false"></button><button class="clear" type="button" data-text="clear"></button></div>
+      <div class="actions"><button class="pause" type="button" aria-pressed="false"></button><button class="clear" type="button" data-text="clear"></button><button class="add-entities" type="button" data-text="addEntities"></button></div>
       <div class="plots"></div><div class="chart-pager pager"></div><div class="limit" data-text="limited" hidden></div><div class="foot" data-text="snapshot"></div></section></div>
-      <p class="notice" data-text="memory"></p>`;
+      <p class="notice" data-text="memory"></p>
+      <dialog class="addition-dialog" aria-labelledby="addition-title"><h2 id="addition-title" data-text="addTitle"></h2><p class="addition-dialog-status" role="status" aria-live="polite"></p><div class="dialog-body"></div><div class="dialog-actions"><button class="addition-cancel" type="button"></button><button class="addition-retry" type="button" data-text="addRetry"></button><button class="addition-confirm primary" type="button" data-text="addConfirm"></button></div></dialog>`;
     const find = selector => this.shadowRoot.querySelector(selector);
     this._search = find("input[type=search]");
     this._filter = find(".filter");
@@ -430,12 +483,23 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._plcs = find(".plcs");
     this._tbody = find("tbody");
     this._plots = find(".plots");
+    this._additionDialog = find(".addition-dialog");
+    find(".add-entities").onclick = () => this._startAddition();
+    find(".addition-confirm").onclick = () => this._confirmAddition();
+    find(".addition-retry").onclick = () => this._startAddition();
+    find(".addition-details").onclick = () => this._additionDialog.showModal();
+    find(".addition-cancel").onclick = () => this._additionDialog.close();
+    this._additionDialog.oncancel = event => { if (this._addition?.phase === "confirming") event.preventDefault(); };
+    this._additionDialog.onclose = () => {
+      if (!this._additionDialog.open && ["previewing", "preview", "stale", "previewError"].includes(this._addition?.phase)) this._resetAddition();
+    };
     find(".menu").onclick = () => this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
     find(".refresh").onclick = () => { this._subscriptionFailed = false; this._loadEntries(); };
     this._search.oninput = () => { this._query = this._search.value.toLocaleLowerCase(); this._tablePage = 0; this._scheduleRender(); };
     this._filter.onchange = () => { this._type = this._filter.value; this._tablePage = 0; this._scheduleRender(); };
     this._haSelect.onchange = () => { this._haFilter = this._haSelect.value; this._tablePage = 0; this._scheduleRender(); };
     this._plcs.onchange = () => {
+      this._resetAddition();
       this._stopSubscription();
       this._entryId = this._plcs.value || null;
       this.model = new MonitorHistory();
@@ -545,6 +609,183 @@ export class AMiTMonitorPanel extends HTMLElement {
     find(".limit").hidden = !this.model.trimmed;
     this._renderRows();
     this._renderCharts();
+    this._renderAddition();
+  }
+
+  _additionBinding() {
+    return JSON.stringify([this.model.runtime, [...this.model.selected.keys()], [...this.model.catalog.values()]]);
+  }
+
+  _additionBusy() {
+    return ["previewing", "confirming", "saved", "reloading", "pending"].includes(this._addition?.phase);
+  }
+
+  _stopAdditionPoll() {
+    clearTimeout(this._additionTimer);
+    this._additionTimer = null;
+    this._additionPollRequest = null;
+  }
+
+  _resetAddition() {
+    this._stopAdditionPoll();
+    this._addition = null;
+    this._additionRenderKey = null;
+    this._additionDialog?.close();
+    this._scheduleRender();
+  }
+
+  _invalidateAddition() {
+    if (["previewing", "preview"].includes(this._addition?.phase)) {
+      this._addition.phase = "stale";
+      this._addition.preview = null;
+      this._scheduleRender();
+    }
+  }
+
+  _checkAddition() {
+    if (this._addition && this._addition.binding !== this._additionBinding()) this._invalidateAddition();
+  }
+
+  async _startAddition() {
+    if (this._additionBusy() || !this._connection?.connected || this._unavailable || !this.model.runtime || !this.model.selected.size) return;
+    this._stopAdditionPoll();
+    this._additionRenderKey = null;
+    const addition = this._addition = {
+      entryId: this._entryId, title: this._entries.find(e => e.entry_id === this._entryId)?.title || this._t("plc"),
+      runtime: this.model.runtime, binding: this._additionBinding(), phase: "previewing",
+      variables: [...this.model.selected.keys()].map(wid => ({ wid, revision: this.model.catalog.get(wid).revision })),
+    };
+    this._renderAddition();
+    if (!this._additionDialog.open) this._additionDialog.showModal();
+    const connection = this._connection;
+    try {
+      const preview = await connection.sendMessagePromise({ type: "amit/monitor/preview_add",
+        entry_id: addition.entryId, runtime_id: addition.runtime, variables: addition.variables });
+      if (this._addition !== addition || addition.phase !== "previewing" || connection !== this._connection) return;
+      this._checkAddition();
+      if (addition.phase !== "previewing") return;
+      addition.preview = preview;
+      addition.phase = "preview";
+    } catch (error) {
+      if (this._addition === addition && addition.phase === "previewing") {
+        addition.phase = "previewError";
+        addition.error = error?.code === "unauthorized" ? "admin" : "addPreviewError";
+      }
+    }
+    this._scheduleRender();
+  }
+
+  async _confirmAddition() {
+    this._checkAddition();
+    const addition = this._addition;
+    if (addition?.phase !== "preview" || !addition.preview.requires_reload || !this._connection?.connected) return;
+    addition.phase = "confirming";
+    this._renderAddition();
+    try {
+      const result = await this._connection.sendMessagePromise({ type: "amit/monitor/confirm_add",
+        entry_id: addition.entryId, runtime_id: addition.runtime, variables: addition.variables,
+        preview_id: addition.preview.preview_id, expires_at: addition.preview.expires_at });
+      if (this._addition !== addition) return;
+      addition.phase = result.status;
+      addition.operation = result;
+      this._pollAddition();
+    } catch (error) {
+      if (this._addition !== addition) return;
+      const code = error?.code;
+      addition.phase = ["stale_selection", "stale_preview", "expired_preview", "invalid_selection", "not_found"].includes(code) ? "stale" :
+        ["save_failed", "busy", "unauthorized", "invalid_configuration"].includes(code) ? "saveError" : "unknown";
+      addition.error = code === "unauthorized" ? "admin" : code === "busy" ? "addBusy" : "addSaveError";
+    }
+    this._scheduleRender();
+  }
+
+  async _pollAddition() {
+    clearTimeout(this._additionTimer);
+    this._additionTimer = null;
+    const addition = this._addition, connection = this._connection;
+    if (!addition?.operation?.operation_id || !["saved", "reloading", "pending"].includes(addition.phase) ||
+        !this.isConnected || this._pageAway || document.hidden || !connection?.connected || this._additionPollRequest) return;
+    const request = this._additionPollRequest = {};
+    try {
+      const result = await connection.sendMessagePromise({ type: "amit/monitor/addition_status",
+        entry_id: addition.entryId, operation_id: addition.operation.operation_id });
+      if (this._additionPollRequest !== request || this._addition !== addition || connection !== this._connection) return;
+      addition.operation = result;
+      addition.phase = result.status;
+      addition.pollError = false;
+      if (result.status === "loaded") {
+        this.model.clearHistory();
+        this.model.latest.clear();
+        this._stopSubscription();
+        this._subscriptionFailed = false;
+        await this._loadEntries();
+      }
+    } catch (error) {
+      if (this._additionPollRequest !== request || this._addition !== addition) return;
+      if (["not_found", "unauthorized"].includes(error?.code)) {
+        addition.phase = "unknown";
+        addition.pollError = false;
+      }
+      else addition.pollError = true;
+    } finally {
+      if (this._additionPollRequest === request) {
+        this._additionPollRequest = null;
+        if (this._addition === addition && ["saved", "reloading", "pending"].includes(addition.phase) &&
+            this.isConnected && !this._pageAway && !document.hidden && connection.connected) {
+          this._additionTimer = setTimeout(() => this._pollAddition(), 2000);
+        }
+        this._scheduleRender();
+      }
+    }
+  }
+
+  _renderAddition() {
+    if (!this._additionDialog) return;
+    const find = selector => this.shadowRoot.querySelector(selector), addition = this._addition;
+    find(".add-entities").disabled = this._additionBusy() || !this.model.selected.size || !this.model.runtime ||
+      !this._connection?.connected || this._unavailable;
+    find(".addition-status").hidden = !addition || ["previewing", "preview"].includes(addition.phase);
+    if (!addition) return;
+    const keys = { previewing: "addPreviewing", preview: "addTitle", confirming: "addConfirming", saved: "addSaved",
+      reloading: "addReloading", pending: "addPending", loaded: "addLoaded", unchanged: "addUnchanged", failed: "addFailed",
+      stale: "addStale", unknown: "addUnknown", previewError: addition.error, saveError: addition.error };
+    const message = this._t(addition.pollError ? "addStatusError" : keys[addition.phase]);
+    find(".addition-status [role=status]").textContent = `${addition.title}: ${message}`;
+    const status = find(".addition-dialog-status");
+    status.textContent = addition.phase === "preview" ? this._t("addPreviewReady") : message;
+    status.className = `addition-dialog-status ${["failed", "unknown", "stale", "previewError", "saveError"].includes(addition.phase) ? "error" : "muted"}`;
+    const cancel = find(".addition-cancel"), confirm = find(".addition-confirm"), retry = find(".addition-retry");
+    cancel.textContent = this._t(["previewing", "preview"].includes(addition.phase) ? "cancel" : "close");
+    cancel.disabled = addition.phase === "confirming";
+    confirm.hidden = addition.phase !== "preview" || !addition.preview?.requires_reload;
+    retry.hidden = !["stale", "previewError", "saveError", "unknown"].includes(addition.phase);
+    retry.disabled = !this._connection?.connected || this._unavailable || !this.model.selected.size;
+    const key = JSON.stringify([this._lang, addition.phase, addition.preview, addition.pollError, addition.error]);
+    if (this._additionRenderKey === key) return;
+    this._additionRenderKey = key;
+    const body = find(".dialog-body");
+    body.replaceChildren(node("p", "name", addition.title));
+    if (addition.phase !== "preview") return;
+    const preview = addition.preview;
+    body.append(node("p", "small muted", this._t("addScope")),
+      node("p", "number", `${this._t("addSelected")}: ${preview.requested_wids.length} · ${this._t("addNew")}: ${preview.added_wids.length} · ${this._t("addExisting")}: ${preview.already_configured_wids.length}`),
+      node("p", "number", `${this._t("addMonitored")}: ${preview.newly_monitored_wids.length}`));
+    if (preview.selection_mode === "all") body.append(node("p", "addition-warning", this._t("addAll")));
+    const list = node("div", "addition-list");
+    list.setAttribute("role", "list");
+    for (const item of preview.variables) {
+      const variable = { ...item, ...entityFields(item) }, row = node("div", "addition-item");
+      row.setAttribute("role", "listitem");
+      row.append(node("span", "name", this._variableName(variable)),
+        node("span", "small muted identity", `${this._t("plcVariable")}: ${variable.name} · WID ${variable.wid} · ${variable.type}`));
+      if (variable.entities.length) row.append(node("span", "small muted identity", this._entityInfo(variable)));
+      list.append(row);
+    }
+    body.append(list, node("p", "small", this._t("addReadOnly")));
+    if (preview.removed_write_wids.length) body.append(node("p", "addition-warning small",
+      `${this._t("addRemovedWrites")}: ${preview.removed_write_wids.map(wid => `WID ${wid}`).join(", ")}`));
+    body.append(node("p", preview.requires_reload ? "addition-warning" : "muted",
+      this._t(preview.requires_reload ? "addHistory" : "addUnchanged")));
   }
 
   _pager(element, page, count, size, update) {
@@ -587,7 +828,7 @@ export class AMiTMonitorPanel extends HTMLElement {
       if (!entry) {
         const row = node("tr"), checkCell = node("td"), label = node("label"), checkbox = node("input");
         checkbox.type = "checkbox";
-        checkbox.onchange = () => { this.model.select(variable.wid, checkbox.checked); this._scheduleRender(); };
+        checkbox.onchange = () => { this.model.select(variable.wid, checkbox.checked); this._checkAddition(); this._scheduleRender(); };
         label.append(checkbox); checkCell.append(label);
         const nameCell = node("td"), name = node("span", "name"), metadata = node("span", "identity small muted"), entities = node("div", "entity-info small muted");
         nameCell.append(name, metadata, entities);

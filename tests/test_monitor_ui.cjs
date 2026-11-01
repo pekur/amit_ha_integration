@@ -36,13 +36,14 @@ async function mount(browser, options = {}) {
       sequence: 10, variables, entityMetadata: new Map(), active: new Map(), pending: [], nextId: 1, calls: 0,
       entries: [{ entry_id: "first", title: "Vytápění · Biosuntec" }, { entry_id: "second", title: "Vzduchotechnika · Generic" }],
       listeners: new Map(), deferSubscription: Boolean(options.deferSubscription),
+      messages: [], additionStatus: "pending", runtimeSuffix: "", deferPreview: false, deferConfirm: false,
     };
     fixture.reading = (wid, value, status = "ok") => ({
       wid, value, status, sequence: ++fixture.sequence,
       revision: fixture.variables.find(v => v.wid === wid)?.revision,
       timestamp: new Date(Date.now() - 60000 + fixture.sequence * 1000).toISOString(),
     });
-    fixture.snapshot = entry => ({ kind: "snapshot", runtime_id: `runtime-${entry}`, sequence: fixture.sequence,
+    fixture.snapshot = entry => ({ kind: "snapshot", runtime_id: `runtime-${entry}${fixture.runtimeSuffix}`, sequence: fixture.sequence,
       variables: fixture.variables.map(v => ({ ...v, configured: false, entities: [], ...fixture.entityMetadata.get(entry)?.get(v.wid) })), scan_interval: 30,
       samples: [{ ...fixture.reading(4101, 22.4), sequence: fixture.sequence }],
     });
@@ -50,7 +51,30 @@ async function mount(browser, options = {}) {
       connected: true,
       addEventListener(name, cb) { if (!fixture.listeners.has(name)) fixture.listeners.set(name, new Set()); fixture.listeners.get(name).add(cb); },
       removeEventListener(name, cb) { fixture.listeners.get(name)?.delete(cb); },
-      async sendMessagePromise(message) { assertType(message.type, "amit/monitor/list"); return fixture.entries; },
+      async sendMessagePromise(message) {
+        fixture.messages.push(structuredClone(message));
+        if (message.type === "amit/monitor/list") return fixture.entries;
+        if (message.type === "amit/monitor/preview_add") {
+          if (fixture.deferPreview) await new Promise(resolve => { fixture.resolvePreview = resolve; });
+          const requested = message.variables.map(v => v.wid);
+          return fixture.preview || { preview_id: "synthetic-preview", expires_at: Math.floor(Date.now() / 1000) + 300,
+            entry_id: message.entry_id, runtime_id: message.runtime_id, requested_wids: requested, added_wids: requested,
+            already_configured_wids: [], newly_monitored_wids: requested, removed_write_wids: [], selection_mode: "explicit",
+            requires_reload: true, variables: fixture.snapshot(message.entry_id).variables.filter(v => requested.includes(v.wid)) };
+        }
+        if (message.type === "amit/monitor/confirm_add") {
+          if (fixture.deferConfirm) await new Promise(resolve => { fixture.resolveConfirm = resolve; });
+          if (fixture.confirmError) throw fixture.confirmError;
+          return { entry_id: message.entry_id, operation_id: "synthetic-operation", status: "saved", saved: true, error: null };
+        }
+        if (message.type === "amit/monitor/addition_status") {
+          if (fixture.statusError) throw fixture.statusError;
+          if (fixture.additionStatus === "loaded") fixture.runtimeSuffix = "-reloaded";
+          return { entry_id: message.entry_id, operation_id: message.operation_id,
+            status: fixture.additionStatus, saved: true, error: fixture.additionStatus === "failed" ? "reload_failed" : null };
+        }
+        throw Error(`Unexpected command ${message.type}`);
+      },
       subscribeMessage(callback, message, opts) {
         assertType(message.type, "amit/monitor/subscribe");
         if (opts.resubscribe !== false) throw Error("Duplicate reconnect ownership");
@@ -64,12 +88,12 @@ async function mount(browser, options = {}) {
       },
     };
     function assertType(actual, expected) { if (actual !== expected) throw Error(`Unexpected command ${actual}`); }
-    fixture.emit = sample => { for (const active of fixture.active.values()) active.callback({ kind: "sample", runtime_id: `runtime-${active.entry}`, sample }); };
+    fixture.emit = sample => { for (const active of fixture.active.values()) active.callback({ kind: "sample", runtime_id: `runtime-${active.entry}${fixture.runtimeSuffix}`, sample }); };
     fixture.metadata = (variables, entry = "first") => {
       if (!fixture.entityMetadata.has(entry)) fixture.entityMetadata.set(entry, new Map());
       for (const variable of variables) fixture.entityMetadata.get(entry).set(variable.wid, variable);
       for (const active of fixture.active.values()) if (active.entry === entry)
-        active.callback({ kind: "entity_metadata", runtime_id: `runtime-${entry}`, variables });
+        active.callback({ kind: "entity_metadata", runtime_id: `runtime-${entry}${fixture.runtimeSuffix}`, variables });
     };
     fixture.event = name => { for (const cb of fixture.listeners.get(name) || []) cb(); };
     fixture.visibility = hidden => { window.fakeHidden = hidden; document.dispatchEvent(new Event("visibilitychange")); };
@@ -396,6 +420,243 @@ async function run() {
       assert.equal(await page.evaluate(() => panel._rows.get(4101).name.textContent), "TE_obyvak");
       assert.deepEqual(errors, []); assert.deepEqual(requests, []);
       results.push("HA names, original PLC identity, disabled and multiple entities, combined filters, rename/removal without history loss, safe text, mobile themes, reconnect and PLC isolation");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser);
+      await select(page, "TE_obyvak");
+      await page.evaluate(() => {
+        fixture.emit(fixture.reading(4101, 25));
+        fixture.variables.push(...Array.from({ length: 55 }, (_, i) => ({
+          wid: 5000 + i, name: `Extra ${i}`, type: "Float", revision: 20 + i, readable: true,
+        })));
+        for (const active of fixture.active.values()) active.callback(fixture.snapshot(active.entry));
+      });
+      await page.locator("amit-monitor-panel .table-pager").getByRole("button", { name: "Další strana", exact: true }).click();
+      await select(page, "Extra 54");
+      await page.getByRole("searchbox").fill("nothing matches");
+      await page.getByRole("button", { name: "Přidat vybrané jako HA entity", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("button", { name: "Uložit a načíst entity", exact: true }).waitFor();
+      assert.deepEqual(await page.evaluate(() => fixture.messages.find(m => m.type === "amit/monitor/preview_add").variables.map(v => v.wid)), [4101, 5054]);
+      assert.equal(await dialog.getByRole("listitem").count(), 2);
+      assert.ok((await dialog.textContent()).includes("Extra 54"));
+      assert.ok((await dialog.textContent()).includes("Opětovné načtení vymaže dočasnou historii"));
+      await dialog.getByRole("button", { name: "Zrušit", exact: true }).click();
+      await page.waitForFunction(() => panel._addition === null);
+      assert.equal(await page.evaluate(() => panel.model.count), 1);
+      assert.equal(await page.evaluate(() => fixture.messages.some(m => m.type === "amit/monitor/confirm_add")), false);
+      assert.equal(await page.evaluate(() => panel.shadowRoot.activeElement.className), "add-entities");
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("permanent addition includes selected variables across pages and filters; cancel preserves history and focus without saving");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser);
+      await select(page, "TE_obyvak");
+      await page.evaluate(() => {
+        fixture.emit(fixture.reading(4101, 26));
+        const variables = fixture.snapshot("first").variables.filter(v => [4101, 4102, 0].includes(v.wid));
+        variables[0].entities = [{ entity_id: "sensor.living_room", name: "Obývák – vlastní název", custom_name: "Obývák – vlastní název", disabled: true }];
+        fixture.preview = { preview_id: "all-preview", expires_at: Math.floor(Date.now() / 1000) + 300,
+          requested_wids: [4101], added_wids: [], already_configured_wids: [4101], newly_monitored_wids: [4102, 0],
+          removed_write_wids: [999], selection_mode: "all", requires_reload: true, variables };
+      });
+      await page.getByRole("button", { name: "Přidat vybrané jako HA entity", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("button", { name: "Uložit a načíst entity", exact: true }).waitFor();
+      assert.equal(await dialog.getByRole("listitem").count(), 3);
+      for (const text of ["všechny čitelné proměnné", "Obývák – vlastní název", "Zakázaná", "WID 999", "<img src="])
+        assert.ok((await dialog.textContent()).includes(text), text);
+      assert.equal(await dialog.locator("img").count(), 0);
+      for (const dark of [false, true]) {
+        await theme(page, dark);
+        for (const width of [320, 390, 1024]) {
+          await page.setViewportSize({ width, height: 1000 });
+          await page.waitForTimeout(180);
+          assert.equal(await dialog.evaluate(e => e.scrollWidth <= e.clientWidth + 1), true);
+          const contrast = await dialog.evaluate(e => {
+            const context = document.createElement("canvas").getContext("2d");
+            const luminance = color => {
+              context.fillStyle = color; context.fillRect(0, 0, 1, 1);
+              const channels = [...context.getImageData(0, 0, 1, 1).data].slice(0, 3).map(v => {
+                const c = v / 255; return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4;
+              });
+              return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
+            };
+            return [...e.querySelectorAll(".addition-warning,.primary")].map(element => {
+              const style = getComputedStyle(element), a = luminance(style.color), b = luminance(style.backgroundColor);
+              return (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
+            });
+          });
+          assert.ok(contrast.every(ratio => ratio >= 4.5), `Dialog text contrast: ${contrast}`);
+          await page.keyboard.press("Tab");
+          assert.equal(await dialog.evaluate(e => {
+            const active = e.getRootNode().activeElement;
+            return e.contains(active) || (active === null && document.activeElement === document.body);
+          }), true);
+          if (process.env.AMIT_SCREENSHOT_DIR) await page.screenshot({
+            path: path.join(process.env.AMIT_SCREENSHOT_DIR, `amit-addition-${dark ? "dark" : "light"}-${width}.png`), fullPage: true,
+          });
+        }
+      }
+      await page.evaluate(() => { panel.hass = { ...panel._hass, language: "en" }; });
+      await dialog.getByRole("button", { name: "Save and load entities", exact: true }).click();
+      await page.waitForFunction(() => panel._addition?.phase === "pending");
+      assert.equal(await page.evaluate(() => panel.model.count), 1);
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await page.evaluate(() => {
+        fixture.entries = [];
+        for (const active of [...fixture.active.values()]) active.callback({ kind: "unavailable", runtime_id: "runtime-first" });
+      });
+      await page.waitForFunction(() => panel._unavailable && panel._entries.length === 0);
+      assert.ok((await page.locator("amit-monitor-panel .addition-status").textContent()).includes("Selection saved"));
+      await page.evaluate(() => { fixture.connection.connected = false; fixture.event("disconnected"); });
+      await page.evaluate(() => {
+        fixture.entries = [{ entry_id: "first", title: "Vytápění · Biosuntec" }];
+        fixture.additionStatus = "loaded";
+        fixture.connection.connected = true; fixture.event("ready");
+      });
+      await page.waitForFunction(() => panel._addition?.phase === "loaded" && panel.model.runtime === "runtime-first-reloaded");
+      assert.equal(await page.evaluate(() => panel.model.count), 0);
+      assert.equal(await page.evaluate(() => fixture.messages.filter(m => m.type === "amit/monitor/confirm_add").length), 1);
+      assert.equal(await page.evaluate(() => panel._entryId), "first");
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("all-mode full preview, safe names and disabled entities, mobile modal themes and keyboard focus, saved/pending/loaded states, final-PLC reload and reconnect with history reset");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser);
+      await select(page, "TE_obyvak");
+      await page.evaluate(() => { fixture.deferPreview = true; });
+      await page.getByRole("button", { name: "Přidat vybrané jako HA entity", exact: true }).click();
+      await page.waitForFunction(() => Boolean(fixture.resolvePreview));
+      await page.getByRole("dialog").getByRole("button", { name: "Zrušit", exact: true }).click();
+      await page.evaluate(() => { fixture.resolvePreview(); fixture.deferPreview = false; });
+      await page.waitForFunction(() => panel._addition === null);
+      await page.getByRole("button", { name: "Přidat vybrané jako HA entity", exact: true }).click();
+      await page.waitForFunction(() => panel._addition?.phase === "preview");
+      await page.evaluate(() => fixture.metadata([{ wid: 4101, configured: false, entities: [
+        { entity_id: "sensor.changed", name: "Renamed", custom_name: "Renamed", disabled: false },
+      ] }]));
+      await page.waitForFunction(() => panel._addition?.phase === "stale");
+      await page.getByRole("dialog").getByRole("button", { name: "Uložit a načíst entity", exact: true }).waitFor({ state: "hidden" });
+      await page.getByRole("dialog").getByRole("button", { name: "Připravit nový náhled", exact: true }).click();
+      await page.waitForFunction(() => panel._addition?.phase === "preview");
+      await page.evaluate(() => {
+        fixture.connection.connected = false; fixture.event("disconnected");
+      });
+      await page.waitForFunction(() => panel._addition?.phase === "stale");
+      await page.evaluate(() => { fixture.connection.connected = true; fixture.event("ready"); });
+      await page.getByRole("dialog").getByRole("button", { name: "Zavřít", exact: true }).click();
+      await page.evaluate(() => { fixture.deferPreview = true; fixture.resolvePreview = null; });
+      await page.getByRole("button", { name: "Přidat vybrané jako HA entity", exact: true }).click();
+      await page.waitForFunction(() => Boolean(fixture.resolvePreview));
+      await page.evaluate(() => {
+        panel._plcs.value = "second"; panel._plcs.dispatchEvent(new Event("change")); fixture.resolvePreview();
+      });
+      await page.waitForFunction(() => panel._entryId === "second" && panel.model.runtime === "runtime-second");
+      assert.equal(await page.evaluate(() => panel._addition), null);
+      assert.equal(await page.getByRole("dialog").count(), 0);
+      assert.equal(await page.evaluate(() => fixture.messages.some(m => m.type === "amit/monitor/confirm_add")), false);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("late previews cannot reopen canceled dialogs or cross PLCs; registry updates and disconnect invalidate confirmation");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser);
+      await select(page, "TE_obyvak");
+      await page.evaluate(() => { fixture.deferConfirm = true; fixture.confirmError = {}; fixture.emit(fixture.reading(4101, 27)); });
+      await page.getByRole("button", { name: "Přidat vybrané jako HA entity", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("button", { name: "Uložit a načíst entity", exact: true }).click();
+      await page.waitForFunction(() => panel._addition?.phase === "confirming");
+      assert.equal(await dialog.getByRole("button", { name: "Zavřít", exact: true }).isDisabled(), true);
+      await page.keyboard.press("Escape");
+      assert.equal(await dialog.count(), 1);
+      await page.evaluate(() => panel._confirmAddition());
+      assert.equal(await page.evaluate(() => fixture.messages.filter(m => m.type === "amit/monitor/confirm_add").length), 1);
+      await page.evaluate(() => { fixture.resolveConfirm(); fixture.deferConfirm = false; });
+      await page.waitForFunction(() => panel._addition?.phase === "unknown");
+      await dialog.getByText("Výsledek potvrzení nelze ověřit.", { exact: false }).waitFor();
+      assert.ok((await dialog.textContent()).includes("Výběr mohl být uložen"));
+      assert.equal(await page.evaluate(() => panel.model.count), 1);
+      for (const [code, expected] of [["stale_preview", "stale"], ["expired_preview", "stale"], ["save_failed", "saveError"], ["busy", "saveError"]]) {
+        await page.evaluate(code => { fixture.confirmError = { code }; }, code);
+        await dialog.getByRole("button", { name: "Připravit nový náhled", exact: true }).click();
+        await dialog.getByRole("button", { name: "Uložit a načíst entity", exact: true }).click();
+        await page.waitForFunction(phase => panel._addition?.phase === phase, expected);
+      }
+      await page.evaluate(() => { fixture.confirmError = null; fixture.additionStatus = "failed"; });
+      await dialog.getByRole("button", { name: "Připravit nový náhled", exact: true }).click();
+      await dialog.getByRole("button", { name: "Uložit a načíst entity", exact: true }).click();
+      await page.waitForFunction(() => panel._addition?.phase === "failed");
+      await dialog.getByText("Výběr uložen, ale načtení selhalo.", { exact: false }).waitFor();
+      assert.ok((await dialog.textContent()).includes("Výběr uložen, ale načtení selhalo"));
+      await dialog.getByRole("button", { name: "Zavřít", exact: true }).click();
+      await page.evaluate(() => panel.remove());
+      const calls = await page.evaluate(() => fixture.messages.length);
+      await page.waitForTimeout(2200);
+      assert.equal(await page.evaluate(() => fixture.messages.length), calls);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("single confirmation in flight, unknown save outcome, stale/expired/busy/save errors, saved reload failure and close cleanup");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser);
+      await select(page, "TE_obyvak");
+      await page.evaluate(() => {
+        fixture.preview = { preview_id: "noop-preview", expires_at: Math.floor(Date.now() / 1000) + 300,
+          requested_wids: [4101], added_wids: [], already_configured_wids: [4101], newly_monitored_wids: [],
+          removed_write_wids: [], selection_mode: "explicit", requires_reload: false,
+          variables: fixture.snapshot("first").variables.filter(v => v.wid === 4101) };
+        fixture.emit(fixture.reading(4101, 28));
+      });
+      await page.getByRole("button", { name: "Přidat vybrané jako HA entity", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByText("Vybrané proměnné už jsou nastavené.", { exact: false }).waitFor();
+      assert.equal(await dialog.getByRole("button", { name: "Uložit a načíst entity", exact: true }).count(), 0);
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => panel._addition === null);
+      assert.equal(await page.evaluate(() => panel.model.count), 1);
+      assert.equal(await page.evaluate(() => fixture.messages.some(m => m.type === "amit/monitor/confirm_add")), false);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("already configured selection has no save or reload action and preserves history");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser);
+      await select(page, "TE_obyvak");
+      await page.getByRole("button", { name: "Přidat vybrané jako HA entity", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("button", { name: "Uložit a načíst entity", exact: true }).click();
+      await page.waitForFunction(() => panel._addition?.phase === "pending");
+      await dialog.getByRole("button", { name: "Zavřít", exact: true }).click();
+      await page.evaluate(() => fixture.visibility(true));
+      const hiddenCalls = await page.evaluate(() => fixture.messages.length);
+      await page.waitForTimeout(2200);
+      assert.equal(await page.evaluate(() => fixture.messages.length), hiddenCalls);
+      await page.evaluate(() => { fixture.statusError = {}; fixture.visibility(false); });
+      await page.waitForFunction(() => panel._addition?.pollError === true);
+      await page.evaluate(() => {
+        fixture.connection = { ...fixture.connection };
+        fixture.statusError = { code: "not_found" };
+        panel.hass = { ...panel._hass, connection: fixture.connection };
+      });
+      await page.waitForFunction(() => panel._addition?.phase === "unknown");
+      await page.locator("amit-monitor-panel .addition-status").getByText("Výsledek potvrzení nelze ověřit.", { exact: false }).waitFor();
+      assert.equal(await page.evaluate(() => panel._addition.pollError), false);
+      await page.getByRole("button", { name: "Přidat vybrané jako HA entity", exact: true }).click();
+      await page.evaluate(() => { fixture.statusError = null; });
+      await dialog.getByRole("button", { name: "Uložit a načíst entity", exact: true }).click();
+      await page.waitForFunction(() => panel._addition?.phase === "pending");
+      await page.evaluate(() => panel.remove());
+      const closedCalls = await page.evaluate(() => fixture.messages.length);
+      await page.waitForTimeout(2200);
+      assert.equal(await page.evaluate(() => fixture.messages.length), closedCalls);
+      assert.equal(await page.evaluate(() => panel._addition), null);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("pending operation polling stops while hidden and after close; replacement connections resume status checks; lost operation is an unknown outcome");
       await page.close();
     }
     console.log(JSON.stringify({ passed: results }, null, 2));
