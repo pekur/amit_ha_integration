@@ -83,10 +83,18 @@ async function mount(browser, options = {}) {
         fixture.calls++;
         fixture.subscriptionMessages.push(structuredClone(message));
         if (fixture.subscriptionError) return Promise.reject(fixture.subscriptionError);
+        if (message.interval !== undefined && (typeof message.interval !== "number" ||
+            !Number.isFinite(message.interval) || message.interval < 1 || message.interval > 120))
+          return Promise.reject({ code: "invalid_request" });
+        if (message.wids !== undefined && (!Array.isArray(message.wids) || message.wids.some(wid =>
+          !Number.isInteger(wid) || !fixture.variables.some(v => v.wid === wid && v.readable))))
+          return Promise.reject({ code: "invalid_request" });
+        if (fixture.rejectSelected && message.wids) return Promise.reject({ code: "invalid_request" });
         const id = fixture.nextId++;
         fixture.active.set(id, { callback, entry: message.entry_id });
         fixture.oldCallback = callback;
-        callback(fixture.snapshot(message.entry_id, message));
+        if (fixture.deferSnapshot) setTimeout(() => callback(fixture.snapshot(message.entry_id, message)), 0);
+        else callback(fixture.snapshot(message.entry_id, message));
         const unsubscribe = () => { fixture.active.delete(id); };
         return fixture.deferSubscription ? new Promise(resolve => fixture.pending.push(() => resolve(unsubscribe))) : Promise.resolve(unsubscribe);
       },
@@ -128,6 +136,67 @@ async function run() {
   const browser = await chromium.launch({ headless: true, ...(process.env.AMIT_CHROME_PATH ? { executablePath: process.env.AMIT_CHROME_PATH } : {}) });
   const results = [];
   try {
+    for (const suspension of ["hidden", "paused", "disconnected"]) {
+      const { page, errors, requests } = await mount(browser);
+      await select(page, "TE_obyvak");
+      await select(page, "TE_venkovni");
+      await page.evaluate(() => fixture.emit(fixture.reading(4102, 18)));
+      const history = await page.evaluate(() => JSON.stringify(panel.model.selected.get(4102).points));
+      await page.getByRole("spinbutton", { name: "Interval čtení (s)", exact: true }).fill("2.5");
+      await page.getByRole("combobox", { name: "Použít interval pro", exact: true }).selectOption("selected");
+      await page.getByRole("button", { name: "Použít", exact: true }).click();
+      await page.waitForFunction(() => !panel._starting && fixture.subscriptionMessages.at(-1).interval === 2.5);
+      await page.evaluate(suspension => {
+        if (suspension === "hidden") fixture.visibility(true);
+        else if (suspension === "paused") panel.shadowRoot.querySelector(".pause").click();
+        else { fixture.connection.connected = false; fixture.event("disconnected"); }
+      }, suspension);
+      await page.waitForFunction(() => fixture.active.size === 0);
+      const calls = await page.evaluate(() => fixture.calls);
+      await page.evaluate(suspension => {
+        if (suspension === "paused") fixture.variables.find(v => v.wid === 4101).readable = false;
+        else fixture.variables = fixture.variables.filter(v => v.wid !== 4101);
+        fixture.deferSnapshot = suspension === "hidden";
+        if (suspension === "hidden") fixture.visibility(false);
+        else if (suspension === "paused") panel.shadowRoot.querySelector(".pause").click();
+        else { fixture.connection.connected = true; fixture.event("ready"); }
+      }, suspension);
+      await page.waitForFunction(() => fixture.active.size === 1 && !panel._starting &&
+        !panel._subscriptionFailed && fixture.subscriptionMessages.at(-1).wids?.length === 1);
+      assert.deepEqual(await page.evaluate(calls => fixture.subscriptionMessages.slice(calls), calls), [
+        { type: "amit/monitor/subscribe", entry_id: "first", interval: 2.5, wids: [4101, 4102] },
+        { type: "amit/monitor/subscribe", entry_id: "first" },
+        { type: "amit/monitor/subscribe", entry_id: "first", interval: 2.5, wids: [4102] },
+      ]);
+      assert.equal(await page.evaluate(() => JSON.stringify(panel.model.selected.get(4102).points)), history);
+      assert.equal(await page.evaluate(() => panel.model.selected.has(4101)), false);
+      await page.evaluate(() => fixture.emit(fixture.reading(4102, 19)));
+      assert.equal(await page.evaluate(() => panel.model.selected.get(4102).points.length), 2);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push(`selection recovers after catalog change while ${suspension}; remaining history and requested interval survive`);
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser);
+      await select(page, "TE_obyvak");
+      await page.getByRole("spinbutton", { name: "Interval čtení (s)", exact: true }).fill("2");
+      await page.getByRole("combobox", { name: "Použít interval pro", exact: true }).selectOption("selected");
+      await page.getByRole("button", { name: "Použít", exact: true }).click();
+      await page.waitForFunction(() => !panel._starting && fixture.subscriptionMessages.at(-1).interval === 2);
+      await page.evaluate(() => fixture.visibility(true));
+      await page.waitForFunction(() => fixture.active.size === 0);
+      const calls = await page.evaluate(() => fixture.calls);
+      await page.evaluate(() => { fixture.rejectSelected = true; fixture.visibility(false); });
+      await page.waitForFunction(() => panel._subscriptionFailed && fixture.active.size === 0);
+      await page.waitForTimeout(200);
+      assert.equal(await page.evaluate(() => fixture.calls), calls + 3, "Recovery must stop after one catalog refresh and one retry");
+      await page.getByRole("alert").filter({ hasText: "Interval se nepodařilo" }).waitFor();
+      await page.getByRole("button", { name: "Použít interval zařízení", exact: true }).click();
+      await page.waitForFunction(() => fixture.active.size === 1 && !panel._starting && !panel._subscriptionFailed);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("selection recovery is bounded; a repeated rejection releases the temporary subscription and device reset recovers");
+      await page.close();
+    }
     {
       const { page, errors, requests } = await mount(browser);
       const input = page.getByRole("spinbutton", { name: "Interval čtení (s)", exact: true });

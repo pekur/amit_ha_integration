@@ -442,7 +442,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._unsubscribe = null;
   }
 
-  _sync() {
+  _sync({ refreshCatalog = false, retrySelection = true } = {}) {
     if (!this.isConnected || !this._connection?.connected || !this._entryId ||
         this._paused || this._pageAway || document.hidden || this._unavailable) {
       if (this._starting || this._unsubscribe) this._stopSubscription();
@@ -451,18 +451,28 @@ export class AMiTMonitorPanel extends HTMLElement {
     if (this._starting || this._unsubscribe || this._subscriptionFailed) return;
     const token = ++this._token;
     this._starting = true;
+    let refreshed = false, acknowledged = false;
+    const restoreSelection = () => {
+      // The acknowledgement and snapshot can arrive in either order. Release
+      // the temporary default subscription only when both have arrived.
+      if (refreshCatalog && refreshed && acknowledged && token === this._token)
+        this._restartInterval({ retrySelection: false });
+    };
     const receive = event => {
       if (token !== this._token || !this.isConnected || this._paused || document.hidden) return;
       if (event.kind === "snapshot" || event.kind === "catalog") {
         this.model.snapshot(event);
         if (!this._intervalDraft && this._requestedInterval === null) this._intervalInput.value = String(this.model.interval);
         this._checkAddition();
-        if (this._requestedInterval !== null && this._intervalScope === "selected") {
+        if (refreshCatalog) {
+          refreshed = true;
+          queueMicrotask(restoreSelection);
+        } else if (this._requestedInterval !== null && this._intervalScope === "selected") {
           const key = JSON.stringify(this._intervalOptions());
           // A catalog can remove selected WIDs. Replace this subscription after
           // its acknowledgement without losing the browser's history.
           if (key !== requestKey) queueMicrotask(() => {
-            if (token === this._token) this._restartInterval();
+            if (token === this._token) this._restartInterval({ retrySelection });
           });
         }
       } else if (event.kind === "intervals") {
@@ -485,7 +495,7 @@ export class AMiTMonitorPanel extends HTMLElement {
       }
       this._scheduleRender();
     };
-    const options = this._intervalOptions(), requestKey = JSON.stringify(options);
+    const options = refreshCatalog ? {} : this._intervalOptions(), requestKey = JSON.stringify(options);
     this._connection.subscribeMessage(receive,
       { type: "amit/monitor/subscribe", entry_id: this._entryId, ...options }, { resubscribe: false })
       .then(unsubscribe => {
@@ -495,11 +505,19 @@ export class AMiTMonitorPanel extends HTMLElement {
           this._starting = false;
           if (this._intervalError === "intervalFailed") this._intervalError = null;
           this._scheduleRender();
+          acknowledged = true;
+          restoreSelection();
         }
       })
       .catch(error => {
         if (token !== this._token) return;
         this._starting = false;
+        if (error?.code === "invalid_request" && options.wids && retrySelection && !refreshCatalog) {
+          // WIDs may have disappeared while this viewer was suspended. Fetch
+          // a fresh catalog once, then retry only the surviving selection.
+          this._restartInterval({ refreshCatalog: true, retrySelection: false });
+          return;
+        }
         this._subscriptionFailed = true;
         if (this._requestedInterval !== null) this._intervalError = "intervalFailed";
         this._error = error?.code === "unauthorized" ? "admin" : "error";
@@ -526,11 +544,11 @@ export class AMiTMonitorPanel extends HTMLElement {
     if (this._scopeInput) this._scopeInput.value = "all";
   }
 
-  _restartInterval() {
+  _restartInterval(options = {}) {
     this._subscriptionFailed = false;
     this._error = null;
     this._stopSubscription();
-    this._sync();
+    this._sync(options);
     this._scheduleRender();
   }
 
