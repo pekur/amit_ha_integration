@@ -290,6 +290,8 @@ def websocket_addition_status(hass, connection, msg) -> None:
 @websocket_api.websocket_command({
     vol.Required("type"): "amit/monitor/subscribe",
     vol.Required("entry_id"): str,
+    vol.Optional("interval"): object,
+    vol.Optional("wids"): object,
 })
 @websocket_api.require_admin
 @callback
@@ -306,6 +308,7 @@ def websocket_subscribe(hass, connection, msg) -> None:
     variables = snapshot["variables"]
     metadata = _entity_metadata(hass, registry, msg["entry_id"], variables)
     active = True
+    ready = False
 
     def enrich(event):
         return dict(event, variables=[dict(v, **metadata[v["wid"]]) for v in variables])
@@ -313,7 +316,7 @@ def websocket_subscribe(hass, connection, msg) -> None:
     @callback
     def forward(event: dict) -> None:
         nonlocal variables, metadata
-        if not active:
+        if not active or not ready:
             return
         if event["kind"] == "catalog":
             variables = event["variables"]
@@ -348,7 +351,12 @@ def websocket_subscribe(hass, connection, msg) -> None:
 
     unsubscribe_registry = hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, registry_updated)
     try:
-        unsubscribe_monitor = monitor.subscribe(forward)
+        unsubscribe_monitor = monitor.subscribe(
+            forward, interval=msg.get("interval"), wids=msg.get("wids"))
+    except ValueError as err:
+        unsubscribe_registry()
+        connection.send_error(msg["id"], "invalid_request", str(err))
+        return
     except Exception:
         unsubscribe_registry()
         raise
@@ -364,8 +372,10 @@ def websocket_subscribe(hass, connection, msg) -> None:
     # No await: snapshot, registration and acknowledgement are atomic in HA's loop.
     connection.subscriptions[msg["id"]] = unsubscribe
     try:
+        snapshot = monitor.snapshot()
         connection.send_result(msg["id"])
         connection.send_event(msg["id"], enrich(snapshot))
+        ready = True
     except Exception:
         connection.subscriptions.pop(msg["id"], None)
         unsubscribe()

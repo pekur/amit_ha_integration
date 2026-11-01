@@ -169,6 +169,110 @@ class MonitorTests(HAStubTestCase):
         await asyncio.sleep(.01)
         self.assertEqual(self.client.read_variable.await_count, 2)
 
+    async def test_selected_requests_combine_per_wid_and_restore_on_close(self):
+        monitor = self.monitor()
+        with monitor.normal_reads():
+            first = monitor.subscribe(Mock(), interval=2.5, wids=[1])
+            second = monitor.subscribe(Mock(), interval=10)
+            self.assertEqual(monitor.snapshot()["intervals"], {1: 2.5, 2: 10})
+            first()
+            self.assertEqual(monitor.snapshot()["intervals"], {1: 10, 2: 10})
+            second()
+            self.assertEqual(monitor.snapshot()["intervals"], {1: 30, 2: 30})
+            monitor.subscribe(Mock())
+            self.assertEqual(monitor.snapshot()["intervals"], {1: 30, 2: 30})
+
+    async def test_long_interval_overrides_extras_but_not_normal_polling(self):
+        monitor = self.monitor()
+        monitor.subscribe(Mock(), interval=120)
+        await self.next_read()
+        self.client.read_variable.assert_awaited_once_with(self.extra)
+        self.assertEqual(monitor.snapshot()["intervals"], {1: 120, 2: 120})
+        self.assertAlmostEqual(monitor._due[2] - monitor._last_read[2], 120)
+        monitor.record(self.normal, 42)
+        self.assertEqual(monitor.snapshot()["samples"][-1]["value"], 42)
+
+    async def test_fresh_normal_read_defers_extra_read_for_selected_normal(self):
+        monitor = self.monitor([self.normal], [self.normal])
+        with monitor.normal_reads():
+            monitor.subscribe(Mock(), interval=1, wids=[1])
+            monitor.record(self.normal, 7)
+        await asyncio.sleep(.03)
+        self.client.read_variable.assert_not_awaited()
+        monitor._due[1] = 0
+        monitor._wake.set()
+        await self.next_read()
+        self.client.read_variable.assert_awaited_once_with(self.normal)
+        self.client.write_variable.assert_not_awaited()
+
+    async def test_empty_selection_keeps_device_interval(self):
+        monitor = self.monitor([self.normal], [self.normal])
+        monitor.subscribe(Mock(), interval=1, wids=[])
+        self.assertEqual(monitor.snapshot()["intervals"], {1: 30})
+        self.assertIsNone(monitor._task)
+
+    async def test_invalid_requests_do_not_attach_or_start_reads(self):
+        monitor = self.monitor()
+        for interval in (True, "5", 0, .99, 120.01, float("inf"), float("nan")):
+            with self.subTest(interval=interval), self.assertRaises(ValueError):
+                monitor.subscribe(Mock(), interval=interval)
+        for wids in ([True], [999], [3], ["1"], "1"):
+            with self.subTest(wids=wids), self.assertRaises(ValueError):
+                monitor.subscribe(Mock(), interval=1, wids=wids)
+        self.assertEqual(monitor._listeners, {})
+        self.assertIsNone(monitor._task)
+
+    async def test_interval_bounds_and_decimal_are_accepted(self):
+        monitor = self.monitor([self.normal], [self.normal])
+        with monitor.normal_reads():
+            for interval in (1, 1.25, 120):
+                unsubscribe = monitor.subscribe(Mock(), interval=interval)
+                self.assertEqual(monitor.snapshot()["intervals"], {1: interval})
+                unsubscribe()
+
+    async def test_default_viewer_limits_slower_override(self):
+        monitor = self.monitor([self.normal], [self.normal])
+        default = monitor.subscribe(Mock())
+        monitor.subscribe(Mock(), interval=120)
+        self.assertEqual(monitor.snapshot()["intervals"], {1: 30})
+        default()
+        self.assertEqual(monitor.snapshot()["intervals"], {1: 120})
+
+    async def test_removed_selection_is_removed_from_schedule(self):
+        monitor = self.monitor([self.normal], [self.normal])
+        with monitor.normal_reads():
+            monitor.subscribe(Mock(), interval=1, wids=[1])
+            monitor.update_catalog([])
+            self.assertEqual(monitor.snapshot()["intervals"], {})
+
+    async def test_replacement_subscription_reuses_reads_and_keeps_other_viewer(self):
+        monitor = self.monitor()
+        with monitor.normal_reads():
+            observer = Mock()
+            monitor.subscribe(observer)
+            previous = monitor.subscribe(Mock(), interval=1, wids=[1])
+            monitor.record(self.normal, 7)
+            monitor.record(self.extra, 8)
+            samples = monitor.snapshot()["samples"]
+            stamp = monitor._last_read[2]
+            previous()
+            monitor.subscribe(Mock(), interval=2.5, wids=[2])
+            self.assertEqual(monitor.snapshot()["intervals"], {1: 30, 2: 2.5})
+            self.assertEqual(monitor.snapshot()["samples"], samples)
+            self.assertAlmostEqual(monitor._due[2], stamp + 2.5)
+            self.assertEqual(observer.call_args.args[0]["kind"], "intervals")
+        await asyncio.sleep(.03)
+        self.client.read_variable.assert_not_awaited()
+
+    async def test_custom_interval_does_not_shorten_transport_backoff(self):
+        monitor = self.monitor([self.normal], [self.normal])
+        self.client.read_variable.side_effect = TimeoutError("offline")
+        monitor.subscribe(Mock(), interval=1)
+        await self.next_read()
+        self.assertGreater(monitor._retry_after - self.module.monotonic(), 29)
+        await asyncio.sleep(self.module.MIN_READ_DELAY + .03)
+        self.assertEqual(self.client.read_variable.await_count, 1)
+
     async def test_timeout_stops_the_scan_until_backoff_expires(self):
         another = self.protocol.Variable("Other", 4, self.protocol.VarType.INT32)
         monitor = self.monitor([self.extra, another], [], interval=30)

@@ -165,6 +165,51 @@ class WebSocketTests(HAStubTestCase):
         self.assertEqual(second.send_event.call_count, 1)
         self.client.read_variable.assert_not_awaited()
 
+    async def test_custom_subscription_ack_precedes_interval_snapshot(self):
+        self.websocket.websocket_subscribe(self.hass, self.connection,
+            {"id": 1, "entry_id": "first", "interval": 2.5, "wids": [0]})
+        self.connection.send_result.assert_called_once_with(1)
+        self.connection.send_event.assert_called_once()
+        self.assertEqual(self.connection.send_event.call_args.args[1]["intervals"], {0: 2.5})
+        self.connection.subscriptions.pop(1)()
+        self.assertEqual(self.monitor.snapshot()["intervals"], {0: 30})
+
+    async def test_invalid_request_releases_registry_listener(self):
+        for options in ({"interval": True}, {"interval": 121}, {"interval": "2"},
+                        {"interval": float("nan")}, {"wids": [99]}, {"wids": [True]}):
+            self.websocket.websocket_subscribe(self.hass, self.connection,
+                {"id": 1, "entry_id": "first", **options})
+            self.assertEqual(self.connection.send_error.call_args.args[1], "invalid_request")
+            self.assertEqual(self.connection.subscriptions, {})
+            self.assertEqual(self.registry_listeners, {})
+            self.assertEqual(self.monitor._listeners, {})
+        self.connection.send_result.assert_not_called()
+
+    async def test_interval_requests_are_isolated_by_plc(self):
+        other = self.monitor_module.AMiTMonitor(
+            self.hass, self.client, [self.variable], [self.variable], 60)
+        self.addAsyncCleanup(other.async_close)
+        self.hass.data["amit"]["second"] = {"monitor": other}
+        self.websocket.websocket_subscribe(self.hass, self.connection,
+            {"id": 1, "entry_id": "first", "interval": 1})
+        self.subscribe(entry_id="second", msg_id=2)
+        self.assertEqual(self.monitor.snapshot()["intervals"], {0: 1})
+        self.assertEqual(other.snapshot()["intervals"], {0: 60})
+        await self.monitor.async_close()
+        self.assertEqual(set(self.connection.subscriptions), {2})
+
+    async def test_connection_cleanup_restores_remaining_viewer_interval(self):
+        second = self.connection_stub()
+        self.websocket.websocket_subscribe(self.hass, self.connection,
+            {"id": 1, "entry_id": "first", "interval": 1})
+        self.websocket.websocket_subscribe(self.hass, second,
+            {"id": 2, "entry_id": "first", "interval": 10})
+        self.connection.subscriptions.pop(1)()
+        self.assertEqual(self.monitor.snapshot()["intervals"], {0: 10})
+        self.assertEqual(second.send_event.call_args.args[1]["kind"], "intervals")
+        second.subscriptions.pop(2)()
+        self.assertEqual(self.monitor.snapshot()["intervals"], {0: 30})
+
     @unittest.skipUnless(hasattr(asyncio, "eager_task_factory"), "Requires Python 3.12+")
     async def test_eager_worker_cannot_send_samples_before_subscription_ack(self):
         extra = self.protocol.Variable("Extra", 2, self.protocol.VarType.FLOAT)

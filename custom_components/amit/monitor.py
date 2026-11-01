@@ -29,7 +29,7 @@ def _signature(variable: Variable) -> tuple:
 
 
 class AMiTMonitor:
-    """Share ordinary reads and poll only the remaining readable variables."""
+    """Share ordinary reads and fill active viewers' read requirements."""
 
     def __init__(self, hass, client: AMiTClient, variables: list[Variable],
                  monitored: list[Variable], scan_interval: float,
@@ -43,6 +43,9 @@ class AMiTMonitor:
         self._unsub_coordinator: Callable[[], None] | None = None
         self._normal = {_signature(v) for v in monitored if v.is_readable()}
         self._listeners: dict[object, Callable[[dict], None]] = {}
+        self._requests: dict[object, tuple[float | None, frozenset[int] | None]] = {}
+        self._intervals: dict[int, float] = {}
+        self._last_read: dict[int, float] = {}
         self._samples: dict[int, dict] = {}
         self._variables: dict[int, Variable] = {}
         self._revisions: dict[int, int] = {}
@@ -71,6 +74,7 @@ class AMiTMonitor:
             "kind": "snapshot", "runtime_id": self.runtime_id,
             "sequence": self._sequence,
             "scan_interval": self._interval,
+            "intervals": dict(self._intervals),
             "variables": [
                 {"wid": v.wid, "name": v.name, "type": v.type_name,
                  "readable": v.is_readable(), "revision": self._revisions[v.wid],
@@ -90,27 +94,65 @@ class AMiTMonitor:
             return UnitOfTemperature.CELSIUS
         return None
 
-    def subscribe(self, listener: Callable[[dict], None]) -> Callable[[], None]:
+    def subscribe(self, listener: Callable[[dict], None], *,
+                  interval: float | None = None,
+                  wids: list[int] | None = None) -> Callable[[], None]:
         """Attach a listener; the caller sends the initial snapshot this turn."""
         if self._closed:
             raise ValueError("PLC monitor is closed")
+        if interval is not None and (type(interval) not in (int, float)
+                                     or not math.isfinite(interval) or not 1 <= interval <= 120):
+            raise ValueError("Interval must be a finite number from 1 to 120 seconds")
+        if wids is not None and (type(wids) is not list or any(
+            type(wid) is not int or wid not in self._variables
+            or not self._variables[wid].is_readable() for wid in wids
+        )):
+            raise ValueError("Selected WIDs must identify readable catalog variables")
         if not self._listeners and self._coordinator is not None:
             # Keep ordinary polling alive even when all PLC entities are disabled.
             self._unsub_coordinator = self._coordinator.async_add_listener(self._wake.set)
         token = object()
         self._listeners[token] = listener
+        self._requests[token] = (interval, None if wids is None else frozenset(wids))
+        self._refresh_schedule()
         self._start_worker()
         self._wake.set()
 
         def unsubscribe() -> None:
             self._listeners.pop(token, None)
+            self._requests.pop(token, None)
+            self._refresh_schedule()
             if not self._listeners:
                 self._release_coordinator()
                 self._samples.clear()
+                self._last_read.clear()
+                self._due.clear()
                 self._epoch += 1
                 self._wake.set()
 
         return unsubscribe
+
+    def _refresh_schedule(self, *, notify: bool = True) -> None:
+        """Combine viewer requests without changing ordinary entity polling."""
+        intervals = {}
+        for wid, variable in self._variables.items():
+            if variable.is_readable():
+                intervals[wid] = min((
+                    interval if interval is not None and (wids is None or wid in wids)
+                    else self._interval for interval, wids in self._requests.values()
+                ), default=self._interval)
+        changed = intervals != self._intervals
+        self._intervals = intervals
+        self._extras = [v for v in self._variables.values() if v.is_readable() and (
+            _signature(v) not in self._normal or intervals[v.wid] < self._interval)]
+        self._due = {v.wid: self._last_read[v.wid] + intervals[v.wid]
+                     for v in self._extras if v.wid in self._last_read}
+        self._cursor = 0
+        if changed and notify:
+            self._emit({"kind": "intervals", "runtime_id": self.runtime_id,
+                        "intervals": dict(intervals)})
+        self._start_worker()
+        self._wake.set()
 
     def _release_coordinator(self) -> None:
         """Release only the monitor's listener; entity listeners stay intact."""
@@ -131,13 +173,13 @@ class AMiTMonitor:
                 self._revisions[wid] = self._revision
                 self._samples.pop(wid, None)
                 self._due.pop(wid, None)
+                self._last_read.pop(wid, None)
         self._samples = {wid: s for wid, s in self._samples.items() if wid in updated}
         self._due = {wid: due for wid, due in self._due.items() if wid in updated}
         self._revisions = {wid: rev for wid, rev in self._revisions.items() if wid in updated}
         self._variables = updated
-        self._extras = [v for v in updated.values()
-                        if v.is_readable() and _signature(v) not in self._normal]
-        self._cursor = 0
+        self._last_read = {wid: stamp for wid, stamp in self._last_read.items() if wid in updated}
+        self._refresh_schedule(notify=False)
         self._emit(dict(self.snapshot(), kind="catalog"))
         self._start_worker()
         self._wake.set()
@@ -165,6 +207,8 @@ class AMiTMonitor:
                            or not math.isfinite(value)):
             status = "invalid"
         timestamp = datetime.now(timezone.utc).isoformat()
+        self._last_read[variable.wid] = monotonic()
+        self._due[variable.wid] = self._last_read[variable.wid] + self._intervals[variable.wid]
         previous = self._samples.get(variable.wid, {})
         self._sequence += 1
         sample = {
@@ -176,6 +220,7 @@ class AMiTMonitor:
         }
         self._samples[variable.wid] = sample
         if connection_failed:
+            # A faster viewer must not shorten the transport recovery delay.
             self._retry_after = monotonic() + self._interval
         self._emit({"kind": "sample", "runtime_id": self.runtime_id,
                     "sample": dict(sample)})
@@ -221,7 +266,8 @@ class AMiTMonitor:
                         variable = candidate
                         break
                 if variable is None:
-                    await self._wait(max(MIN_READ_DELAY, min(self._due.values()) - now))
+                    await self._wait(max(MIN_READ_DELAY, min(
+                        self._due[v.wid] for v in self._extras) - now))
                     continue
                 epoch = self._epoch
                 revision = self._revisions[variable.wid]
@@ -240,7 +286,6 @@ class AMiTMonitor:
                 # Ignore an old session or a catalog replaced during the read.
                 if (epoch == self._epoch
                         and self._revisions.get(variable.wid) == revision):
-                    self._due[variable.wid] = monotonic() + self._interval
                     self.record(variable, value, failed=failed,
                                 connection_failed=connection_failed)
         finally:
@@ -252,6 +297,9 @@ class AMiTMonitor:
         self._release_coordinator()
         self._emit({"kind": "unavailable", "runtime_id": self.runtime_id})
         self._listeners.clear()
+        self._requests.clear()
+        self._last_read.clear()
+        self._refresh_schedule()
         self._samples.clear()
         self._wake.set()
         if self._task is not None:
