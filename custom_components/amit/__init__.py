@@ -9,7 +9,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers import entity_registry as er
 
@@ -291,7 +291,9 @@ async def _async_setup_connected_entry(
         async def handle_write_variable(call: ServiceCall) -> None:
             """Handle write_variable service call."""
             entry_id = call.data.get("entry_id")
-            if entry_id and entry_id in hass.data[DOMAIN]:
+            if "entry_id" in call.data:
+                if not isinstance(entry_id, str) or entry_id not in hass.data[DOMAIN]:
+                    raise HomeAssistantError("Requested PLC is not loaded")
                 entry_data = hass.data[DOMAIN][entry_id]
             elif len(hass.data[DOMAIN]) == 1:
                 entry_data = next(iter(hass.data[DOMAIN].values()))

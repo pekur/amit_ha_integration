@@ -27,7 +27,7 @@ write_variable:
           mode: box
     entry_id:
       name: Config entry ID
-      description: Required when multiple PLCs are configured.
+      description: Required when multiple PLCs are configured. Unknown or unavailable IDs are rejected.
       selector:
         text:
 

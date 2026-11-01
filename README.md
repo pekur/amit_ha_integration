@@ -136,7 +136,7 @@ The export includes:
 
 ### `amit.write_variable`
 
-Write a value to a monitored PLC variable selected for writing in the integration configuration. The target profile's read-only policy also applies. With multiple PLCs, include the config entry ID in `entry_id`.
+Write a value to a monitored PLC variable selected for writing in the integration configuration. The target profile's read-only policy also applies. With multiple PLCs, include the config entry ID in `entry_id`. An explicitly supplied ID must identify a loaded PLC; unknown or unavailable IDs cause an error without writing to another device. Omitting `entry_id` selects the only loaded PLC when exactly one is available.
 
 ```yaml
 # By WID (variable index)

@@ -305,10 +305,66 @@ class SetupTests(HAStubTestCase):
         }))
         self.client.write_variable.assert_awaited_once_with(control, 43)
 
+    async def register_write_service(self):
+        """Create one loaded PLC with a writable value, without network I/O."""
+        self.hass.data["amit"].clear()
+        self.entry.data["writable_variables"] = ["4001"]
+        self.client.write_variable = AsyncMock(return_value=True)
+        handlers = {}
+        self.hass.services.has_service.return_value = False
+        self.hass.services.async_register.side_effect = lambda domain, name, handler: handlers.update({name: handler})
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        runtime = self.hass.data["amit"][self.entry.entry_id]
+        runtime["coordinator"].async_request_refresh = AsyncMock()
+        return handlers["write_variable"], runtime
 
+    async def test_explicit_unavailable_or_invalid_plc_never_falls_back(self):
+        handler, runtime = await self.register_write_service()
+        other_client = SimpleNamespace(write_variable=AsyncMock(return_value=True))
+        for loaded_count in (1, 2):
+            if loaded_count == 2:
+                self.hass.data["amit"]["other_entry"] = dict(runtime, client=other_client)
+            for target in ("unavailable_plc", "", None, 123, [], {}):
+                with self.subTest(loaded_count=loaded_count, target=target):
+                    with self.assertRaisesRegex(Exception, "Requested PLC is not loaded"):
+                        await handler(SimpleNamespace(data={
+                            "entry_id": target, "wid": 4001, "value": 42,
+                        }))
+                    self.client.write_variable.assert_not_awaited()
+                    other_client.write_variable.assert_not_awaited()
+                    runtime["coordinator"].async_request_refresh.assert_not_awaited()
 
+    async def test_omitted_entry_id_still_selects_single_loaded_plc(self):
+        handler, runtime = await self.register_write_service()
+        await handler(SimpleNamespace(data={"wid": 4001, "value": 42}))
+        self.client.write_variable.assert_awaited_once_with(self.variable, 42)
+        runtime["coordinator"].async_request_refresh.assert_awaited_once()
 
+    async def test_omitted_entry_id_with_multiple_or_no_loaded_plcs_never_writes(self):
+        handler, runtime = await self.register_write_service()
+        other_client = SimpleNamespace(write_variable=AsyncMock(return_value=True))
+        self.hass.data["amit"]["other_entry"] = dict(runtime, client=other_client)
+        for loaded_count in (2, 0):
+            if loaded_count == 0:
+                self.hass.data["amit"].clear()
+            with self.subTest(loaded_count=loaded_count):
+                with self.assertLogs(self.integration.__name__, level="ERROR"):
+                    await handler(SimpleNamespace(data={"wid": 4001, "value": 42}))
+                self.client.write_variable.assert_not_awaited()
+                other_client.write_variable.assert_not_awaited()
 
+    async def test_explicit_valid_entry_id_selects_only_that_plc(self):
+        handler, runtime = await self.register_write_service()
+        other_client = SimpleNamespace(write_variable=AsyncMock(return_value=True))
+        other_coordinator = SimpleNamespace(async_request_refresh=AsyncMock())
+        self.hass.data["amit"]["other_entry"] = dict(
+            runtime, client=other_client, coordinator=other_coordinator,
+        )
+        await handler(SimpleNamespace(data={"entry_id": "other_entry", "wid": 4001, "value": 42}))
+        other_client.write_variable.assert_awaited_once_with(self.variable, 42)
+        other_coordinator.async_request_refresh.assert_awaited_once()
+        self.client.write_variable.assert_not_awaited()
+        runtime["coordinator"].async_request_refresh.assert_not_awaited()
 
 
 if __name__ == "__main__":
