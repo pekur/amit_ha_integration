@@ -36,7 +36,7 @@ from .const import (
     DEFAULT_TARGET,
 )
 from .targets import ALL_TARGETS, get_target
-from .protocol import AMiTClient
+from .protocol import AMiTClient, Variable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,6 +47,48 @@ def _get_writable_wids(variables: list[dict], selected: list[str]) -> set[str]:
     return {
         str(v["wid"]) for v in variables
         if str(v["wid"]) in selected_wids and v.get("writable", False)
+    }
+
+
+def preview_variable_addition(
+    data: dict[str, Any], variables: list[Variable], requested: list[int],
+    monitored: list[Variable], writable_wids: set[int],
+) -> dict[str, Any]:
+    """Calculate an additive selection without saving or enabling new writes."""
+    target = get_target(data.get(CONF_TARGET, DEFAULT_TARGET))
+    readable = {
+        v.wid: v for v in variables if v.is_readable()
+        and (target.wid_min is None or v.wid >= target.wid_min)
+        and (target.wid_max is None or v.wid <= target.wid_max)
+    }
+    if (not requested or len(requested) > 65536
+            or any(type(wid) is not int or wid not in readable for wid in requested)):
+        raise ValueError("invalid_selection")
+    selected = {int(wid) for wid in data.get(CONF_VARIABLES, [])}
+    configured = selected if selected else set(readable)
+    requested_wids = set(requested)
+    result = configured | requested_wids
+    stored_writable = {int(wid) for wid in data.get(CONF_WRITABLE_VARIABLES, [])}
+    allowed = _get_writable_wids([
+        {"wid": v.wid, "writable": v.writable and (
+            target.is_readonly_fn is None or not target.is_readonly_fn(v.name))}
+        for v in readable.values()
+    ], [str(wid) for wid in configured])
+    retained_writable = stored_writable & writable_wids & {int(wid) for wid in allowed}
+    added = result - configured
+    return {
+        "selection_mode": "explicit" if selected else "all",
+        "requested_wids": sorted(requested_wids),
+        "added_wids": sorted(added),
+        "already_configured_wids": sorted(requested_wids & configured),
+        "newly_monitored_wids": sorted((result & readable.keys()) - {v.wid for v in monitored}),
+        "resulting_wids": sorted(result),
+        "removed_write_wids": sorted(stored_writable - retained_writable),
+        "config_patch": {
+            CONF_VARIABLES: list(data.get(CONF_VARIABLES, [])) + [str(wid) for wid in sorted(added)],
+            CONF_WRITABLE_VARIABLES: [wid for wid in data.get(CONF_WRITABLE_VARIABLES, [])
+                                     if int(wid) in retained_writable],
+        },
     }
 
 

@@ -98,6 +98,8 @@ To identify the PLC variable behind a sensor, number, switch, or binary sensor, 
 
 Open **AMiT Monitor** in the Home Assistant sidebar with an administrator account. The panel appears when at least one AMiT entry is loaded and the Home Assistant frontend is enabled. It supports Czech and English, follows the active theme, and adapts to mobile screens.
 
+To hide or show the sidebar item, open your **User profile → Appearance**, then select **Edit** next to the option for changing the order and hiding sidebar items. Toggle **AMiT Monitor** there. This changes the shortcut's visibility; it does not stop a monitor that is still open. Close or pause the monitor to stop its subscription. See [Home Assistant's profile documentation](https://www.home-assistant.io/docs/configuration/user-configuration/).
+
 1. Choose the PLC in the header.
 2. Search by PLC variable name, Home Assistant entity name, or WID. Combine the type filter with **All variables / With HA entity**.
 3. Select variables to start recording new readings in their graphs.

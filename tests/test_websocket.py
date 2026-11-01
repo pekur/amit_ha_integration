@@ -68,18 +68,20 @@ class WebSocketTests(HAStubTestCase):
             data={"amit": {}},
             bus=SimpleNamespace(async_listen=Mock(side_effect=listen)),
             async_create_background_task=lambda coro, name: asyncio.create_task(coro, name=name),
-            config_entries=SimpleNamespace(async_get_entry=Mock(return_value=self.entry)),
+            config_entries=SimpleNamespace(async_get_entry=Mock(return_value=self.entry),
+                                           async_update_entry=Mock(), async_reload=AsyncMock()),
         )
         self.monitor = self.monitor_module.AMiTMonitor(
             self.hass, self.client, [self.variable], [self.variable], 30,
         )
-        self.hass.data["amit"]["first"] = {"monitor": self.monitor}
+        self.hass.data["amit"]["first"] = {"monitor": self.monitor, "all_variables": [self.variable],
+                                           "variables": [self.variable], "writable_wids": set()}
         self.addAsyncCleanup(self.monitor.async_close)
         self.connection = self.connection_stub()
         self.api.async_register_command.reset_mock()
 
     def connection_stub(self):
-        connection = SimpleNamespace(user=SimpleNamespace(is_admin=True), subscriptions={},
+        connection = SimpleNamespace(user=SimpleNamespace(is_admin=True, id="admin"), subscriptions={},
                                      send_result=Mock(), send_event=Mock(), send_error=Mock())
         def close():
             for unsubscribe in list(connection.subscriptions.values()):
@@ -107,15 +109,16 @@ class WebSocketTests(HAStubTestCase):
 
     async def test_registration_is_separate_from_loading_or_unloading_plcs(self):
         self.websocket.async_register_commands(self.hass)
-        self.assertEqual(self.api.async_register_command.call_count, 2)
+        self.assertEqual(self.api.async_register_command.call_count, 3)
         handlers = [c.args[1] for c in self.api.async_register_command.call_args_list]
         self.assertEqual(handlers, [self.websocket.websocket_list,
-                                    self.websocket.websocket_subscribe])
+                                    self.websocket.websocket_subscribe, self.websocket.websocket_preview_add])
 
     async def test_nonadmin_cannot_list_or_subscribe(self):
         self.connection.user.is_admin = False
         for handler, msg in ((self.websocket.websocket_list, {"id": 1}),
-                             (self.websocket.websocket_subscribe, {"id": 2, "entry_id": "first"})):
+                             (self.websocket.websocket_subscribe, {"id": 2, "entry_id": "first"}),
+                             (self.websocket.websocket_preview_add, {"id": 3, "entry_id": "first"})):
             with self.assertRaises(PermissionError):
                 handler(self.hass, self.connection, msg)
         self.assertEqual(self.connection.subscriptions, {})
@@ -383,6 +386,161 @@ class WebSocketTests(HAStubTestCase):
         await self.monitor.async_close()
         self.assertEqual(self.registry_listeners, {})
         self.assertEqual(self.connection.subscriptions, {})
+
+    def addition_setup(self):
+        self.extra = self.protocol.Variable("New", 1, self.protocol.VarType.FLOAT, value=987654.25)
+        self.array = self.protocol.Variable("Array", 2, self.protocol.VarType.ARRAY)
+        self.entry.data.update(target="generic", variables=["0"], writable_variables=["0", "1"], scan_interval=30)
+        self.monitor.update_catalog([self.variable, self.extra, self.array])
+        self.hass.data["amit"]["first"].update(all_variables=[self.variable, self.extra, self.array],
+                                               writable_wids={0})
+        self.registry_entity()
+
+    def addition_message(self, wids=(1,)):
+        catalog = {v["wid"]: v for v in self.monitor.snapshot()["variables"]}
+        return {"id": 99, "type": "amit/monitor/preview_add", "entry_id": "first",
+                "runtime_id": self.monitor.runtime_id,
+                "variables": [{"wid": wid, "revision": catalog[wid]["revision"]} for wid in wids]}
+
+    def addition_preview(self, message=None, connection=None):
+        connection = connection or self.connection
+        connection.send_result.reset_mock()
+        connection.send_error.reset_mock()
+        self.websocket.websocket_preview_add(self.hass, connection, message or self.addition_message())
+        return connection.send_result.call_args.args[1] if connection.send_result.called else None
+
+    async def test_addition_preview_is_read_only_and_omits_credentials_and_values(self):
+        self.addition_setup()
+        before = json.dumps(self.entry.data, sort_keys=True)
+        result = self.addition_preview(self.addition_message((1, 0, 1)))
+        self.assertEqual(result["added_wids"], [1])
+        self.assertEqual(result["already_configured_wids"], [0])
+        self.assertEqual(result["config_patch"], {"variables": ["0", "1"], "writable_variables": ["0"]})
+        self.assertEqual(result["removed_write_wids"], [1])
+        self.assertTrue(result["requires_reload"])
+        self.assertEqual(result["entry_id"], "first")
+        self.assertEqual(result["runtime_id"], self.monitor.runtime_id)
+        self.assertEqual(len(result["preview_id"]), 64)
+        self.assertEqual(result["variables"][0]["entities"][0]["custom_name"], "Room temperature")
+        encoded = json.dumps(result)
+        for hidden in ("private-secret", "987654.25", '"password"', '"samples"', '"value"'):
+            self.assertNotIn(hidden, encoded)
+        self.assertEqual(json.dumps(self.entry.data, sort_keys=True), before)
+        self.hass.config_entries.async_update_entry.assert_not_called()
+        self.hass.config_entries.async_reload.assert_not_awaited()
+        self.client.read_variable.assert_not_awaited()
+        self.client.write_variable.assert_not_awaited()
+        self.assertEqual(self.monitor._listeners, {})
+
+    async def test_addition_preview_preserves_all_mode_and_shows_full_implicit_effect(self):
+        self.addition_setup()
+        self.entry.data["variables"] = []
+        other = self.protocol.Variable("Implicit", 3, self.protocol.VarType.FLOAT, writable=False)
+        self.hass.data["amit"]["first"]["all_variables"].append(other)
+        self.monitor.update_catalog(self.hass.data["amit"]["first"]["all_variables"])
+        result = self.addition_preview()
+        self.assertEqual(result["selection_mode"], "all")
+        self.assertEqual(result["config_patch"]["variables"], [])
+        self.assertEqual(result["added_wids"], [])
+        self.assertEqual(result["newly_monitored_wids"], [1, 3])
+        self.assertEqual([v["wid"] for v in result["variables"]], [1, 3])
+        self.assertEqual(result["config_patch"]["writable_variables"], ["0"])
+
+    async def test_already_added_preview_is_noop_and_preserves_disabled_registry_entities(self):
+        self.addition_setup()
+        self.entry.data["writable_variables"] = ["0"]
+        self.registry_entries["sensor.custom"].disabled_by = "user"
+        result = self.addition_preview(self.addition_message((0,)))
+        self.assertFalse(result["requires_reload"])
+        self.assertEqual(result["added_wids"], [])
+        self.assertTrue(result["variables"][0]["entities"][0]["disabled"])
+        self.assertEqual(result["config_patch"]["variables"], ["0"])
+
+    async def test_addition_preview_rejects_empty_unknown_and_unsupported_selection_as_a_whole(self):
+        self.addition_setup()
+        invalid = [[], [{"wid": 999, "revision": 1}], [{"wid": True, "revision": 2}],
+                   [{"wid": 1, "revision": True}], self.addition_message((2,))["variables"],
+                   self.addition_message()["variables"] + [{"wid": 999, "revision": 1}]]
+        for variables in invalid:
+            with self.subTest(variables=variables):
+                message = {**self.addition_message(), "variables": variables}
+                self.assertIsNone(self.addition_preview(message))
+                self.assertEqual(self.connection.send_error.call_args.args[1], "invalid_selection")
+        self.hass.config_entries.async_update_entry.assert_not_called()
+        self.client.read_variable.assert_not_awaited()
+
+    async def test_addition_preview_rejects_old_runtime_and_changed_variable_definition(self):
+        self.addition_setup()
+        old = self.addition_message()
+        self.assertIsNone(self.addition_preview({**old, "runtime_id": "old-runtime"}))
+        self.assertEqual(self.connection.send_error.call_args.args[1], "stale_selection")
+        renamed = self.protocol.Variable("Changed", 1, self.protocol.VarType.FLOAT)
+        self.monitor.update_catalog([self.variable, renamed, self.array])
+        self.assertIsNone(self.addition_preview(old))
+        self.assertEqual(self.connection.send_error.call_args.args[1], "stale_selection")
+
+    async def test_addition_preview_unknown_closed_or_missing_entry_never_falls_back(self):
+        self.addition_setup()
+        message = self.addition_message()
+        self.assertIsNone(self.addition_preview({**message, "entry_id": "missing"}))
+        self.assertEqual(self.connection.send_error.call_args.args[1], "not_found")
+        self.hass.config_entries.async_get_entry.return_value = None
+        self.assertIsNone(self.addition_preview(message))
+        self.hass.config_entries.async_get_entry.return_value = self.entry
+        await self.monitor.async_close()
+        self.assertIsNone(self.addition_preview(message))
+        self.client.read_variable.assert_not_awaited()
+
+    async def test_preview_fingerprint_tracks_configuration_user_and_registry_but_not_samples(self):
+        self.addition_setup()
+        unsubscribe = self.monitor.subscribe(Mock())
+        with patch.object(self.websocket, "time", return_value=1000.75):
+            first = self.addition_preview()
+            self.assertEqual(first["expires_at"], 1300)
+            self.monitor.record(self.variable, 123)
+            self.assertEqual(self.addition_preview()["preview_id"], first["preview_id"])
+            self.entry.data["scan_interval"] = 60
+            configured = self.addition_preview()
+            self.assertNotEqual(configured["preview_id"], first["preview_id"])
+            self.connection.user.id = "other-admin"
+            user_changed = self.addition_preview()
+            self.assertNotEqual(user_changed["preview_id"], configured["preview_id"])
+            self.registry_entries["sensor.custom"].name = "Renamed in HA"
+            # Include that binding in the reviewed variables.
+            before = self.addition_preview(self.addition_message((0, 1)))
+            self.registry_entries["sensor.custom"].disabled_by = "user"
+            self.assertNotEqual(self.addition_preview(self.addition_message((0, 1)))["preview_id"], before["preview_id"])
+        unsubscribe()
+        self.client.read_variable.assert_not_awaited()
+
+    async def test_preview_fingerprint_tracks_readonly_policy_and_other_catalog_changes(self):
+        self.addition_setup()
+        with patch.object(self.websocket, "time", return_value=1000):
+            first = self.addition_preview()
+            self.extra.writable = False
+            self.assertNotEqual(self.addition_preview()["preview_id"], first["preview_id"])
+            first = self.addition_preview()
+            third = self.protocol.Variable("Another", 3, self.protocol.VarType.FLOAT)
+            self.hass.data["amit"]["first"]["all_variables"].append(third)
+            self.monitor.update_catalog(self.hass.data["amit"]["first"]["all_variables"])
+            self.assertNotEqual(self.addition_preview()["preview_id"], first["preview_id"])
+
+    async def test_addition_preview_is_bound_to_one_plc_even_when_wids_match(self):
+        self.addition_setup()
+        other_variable = self.protocol.Variable("Other PLC", 1, self.protocol.VarType.FLOAT)
+        other = self.monitor_module.AMiTMonitor(self.hass, self.client, [self.variable, other_variable], [self.variable], 30)
+        self.addAsyncCleanup(other.async_close)
+        self.hass.data["amit"]["second"] = {"monitor": other, "all_variables": [self.variable, other_variable],
+                                           "variables": [self.variable], "writable_wids": set()}
+        other_entry = SimpleNamespace(data={"target": "generic", "variables": ["0"]})
+        self.hass.config_entries.async_get_entry.side_effect = {"first": self.entry, "second": other_entry}.get
+        message = {**self.addition_message(), "entry_id": "second"}
+        self.assertIsNone(self.addition_preview(message))
+        result = self.addition_preview({**message, "runtime_id": other.runtime_id,
+            "variables": [{"wid": 1, "revision": other.snapshot()["variables"][1]["revision"]}]})
+        self.assertEqual(result["entry_id"], "second")
+        self.assertEqual(result["variables"][0]["name"], "Other PLC")
+        self.hass.config_entries.async_update_entry.assert_not_called()
 
 
 if __name__ == "__main__":

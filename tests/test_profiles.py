@@ -1,5 +1,6 @@
 """Profile classification and writable-selection regressions without HA/PLC."""
 import importlib
+from copy import deepcopy
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -175,6 +176,72 @@ class ProfileEntityTests(HAStubTestCase):
                     self.assertNotIn("raw_value", entity.capability_attributes)
                 client.read_variable.assert_not_awaited()
                 client.write_variable.assert_not_awaited()
+
+
+class AddVariablesPreviewTests(HAStubTestCase):
+    def setUp(self):
+        self.current = self.protocol.Variable("Current", 1, self.protocol.VarType.FLOAT)
+        self.new = self.protocol.Variable("New", 2, self.protocol.VarType.INT16)
+        self.array = self.protocol.Variable("Array", 3, self.protocol.VarType.ARRAY)
+        self.readonly = self.protocol.Variable("ReadOnly", 4, self.protocol.VarType.FLOAT, writable=False)
+        self.variables = [self.current, self.new, self.array, self.readonly]
+        self.data = {"host": "plc.invalid", "password": "private-secret", "target": "generic",
+                     "variables": ["1"], "writable_variables": ["1", "2", "3", "999"],
+                     "scan_interval": 30, "custom_names": {"1": "Custom"}}
+
+    def preview(self, requested):
+        return self.flow_module.preview_variable_addition(
+            self.data, self.variables, requested, [self.current], {1})
+
+    async def test_addition_retains_selection_and_cannot_activate_stale_write_permissions(self):
+        original = deepcopy(self.data)
+        result = self.preview([2, 4, 2])
+        self.assertEqual(result["added_wids"], [2, 4])
+        self.assertEqual(result["newly_monitored_wids"], [2, 4])
+        self.assertEqual(result["resulting_wids"], [1, 2, 4])
+        self.assertEqual(result["removed_write_wids"], [2, 3, 999])
+        self.assertEqual(result["config_patch"], {"variables": ["1", "2", "4"], "writable_variables": ["1"]})
+        self.assertEqual(self.data, original)
+        self.assertEqual(set(result["config_patch"]), {"variables", "writable_variables"})
+
+    async def test_already_configured_is_idempotent_and_preserves_stored_order_and_types(self):
+        self.data["variables"] = [2, "1"]
+        self.data["writable_variables"] = [1]
+        result = self.preview([1])
+        self.assertEqual(result["already_configured_wids"], [1])
+        self.assertEqual(result["added_wids"], [])
+        self.assertEqual(result["config_patch"], {"variables": [2, "1"], "writable_variables": [1]})
+
+    async def test_empty_selection_keeps_all_mode_and_previews_implicit_new_variables(self):
+        self.data["variables"] = []
+        result = self.preview([2])
+        self.assertEqual(result["selection_mode"], "all")
+        self.assertEqual(result["added_wids"], [])
+        self.assertEqual(result["already_configured_wids"], [2])
+        self.assertEqual(result["newly_monitored_wids"], [2, 4])
+        self.assertEqual(result["resulting_wids"], [1, 2, 4])
+        self.assertEqual(result["config_patch"]["variables"], [])
+        self.assertEqual(result["config_patch"]["writable_variables"], ["1"])
+
+    async def test_unknown_existing_selection_is_preserved_but_unknown_additions_are_rejected(self):
+        self.data["variables"] = ["1", "999", "3"]
+        result = self.preview([2])
+        self.assertEqual(result["config_patch"]["variables"], ["1", "999", "3", "2"])
+        self.assertEqual(result["newly_monitored_wids"], [2])
+        for requested in ([], [999], [3], [True], ["2"], [2.0], [None], [2] * 65537, [2, 999]):
+            with self.subTest(requested=requested[:3]):
+                with self.assertRaisesRegex(ValueError, "invalid_selection"):
+                    self.preview(requested)
+
+    async def test_current_profile_policy_and_wid_range_apply_to_cached_variables(self):
+        self.current = self.protocol.Variable("TE01", 4001, self.protocol.VarType.FLOAT, writable=True)
+        new = self.protocol.Variable("Zad_UT1", 4002, self.protocol.VarType.FLOAT)
+        self.variables = [self.current, new, self.new]
+        self.data.update(target="biosuntec", variables=["4001"], writable_variables=["4001", "4002"])
+        result = self.flow_module.preview_variable_addition(self.data, self.variables, [4002], [self.current], {4001})
+        self.assertEqual(result["config_patch"]["writable_variables"], [])
+        with self.assertRaisesRegex(ValueError, "invalid_selection"):
+            self.preview([2])
 
 
 class WritableFlowTests(HAStubTestCase):
