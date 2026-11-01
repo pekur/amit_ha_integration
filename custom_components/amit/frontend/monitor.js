@@ -714,9 +714,13 @@ export class AMiTMonitorPanel extends HTMLElement {
       addition.phase = result.status;
       addition.pollError = false;
       if (result.status === "loaded") {
-        this.model.clearHistory();
-        this.model.latest.clear();
-        this._stopSubscription();
+        // A new runtime snapshot already cleared the old history. Keep any
+        // readings collected since then when the reload result arrives late.
+        if (this.model.runtime === addition.runtime) {
+          this.model.clearHistory();
+          this.model.latest.clear();
+          this._stopSubscription();
+        }
         this._subscriptionFailed = false;
         await this._loadEntries();
       }

@@ -659,6 +659,45 @@ async function run() {
       results.push("pending operation polling stops while hidden and after close; replacement connections resume status checks; lost operation is an unknown outcome");
       await page.close();
     }
+    {
+      const { page, errors, requests } = await mount(browser);
+      await select(page, "TE_obyvak");
+      await page.getByRole("button", { name: "Přidat vybrané jako HA entity", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Uložit a načíst entity", exact: true }).click();
+      await page.waitForFunction(() => panel._addition?.phase === "pending");
+      await page.getByRole("dialog").getByRole("button", { name: "Zavřít", exact: true }).click();
+      await page.evaluate(() => {
+        fixture.entries = [];
+        for (const active of [...fixture.active.values()]) active.callback({ kind: "unavailable", runtime_id: "runtime-first" });
+      });
+      await page.waitForFunction(() => panel._unavailable && panel._entries.length === 0);
+      await page.evaluate(() => {
+        fixture.runtimeSuffix = "-reloaded";
+        fixture.entries = [{ entry_id: "first", title: "Vytápění · Biosuntec" }];
+      });
+      await page.getByRole("button", { name: "Obnovit seznam PLC", exact: true }).click();
+      await page.waitForFunction(() => panel.model.runtime === "runtime-first-reloaded");
+      const before = await page.evaluate(() => {
+        fixture.emit(fixture.reading(4101, 29));
+        return { series: JSON.stringify([...panel.model.selected]), count: panel.model.count,
+          latest: JSON.stringify([...panel.model.latest]), subscriptions: fixture.calls };
+      });
+      assert.equal(before.count, 1);
+      await page.evaluate(async () => {
+        fixture.additionStatus = "loaded";
+        await panel._pollAddition();
+      });
+      await page.waitForFunction(() => panel._addition?.phase === "loaded");
+      const after = await page.evaluate(() => ({ series: JSON.stringify([...panel.model.selected]), count: panel.model.count,
+        latest: JSON.stringify([...panel.model.latest]), subscriptions: fixture.calls }));
+      assert.deepEqual(after, before);
+      await page.evaluate(() => fixture.emit(fixture.reading(4101, 30)));
+      assert.equal(await page.evaluate(() => panel.model.count), 2);
+      assert.equal(await page.evaluate(() => panel.model.selected.get(4101).points.at(-1).breakBefore), false);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("late reload success preserves fresh runtime history, latest values, subscription and uninterrupted subsequent samples");
+      await page.close();
+    }
     console.log(JSON.stringify({ passed: results }, null, 2));
   } finally { await browser.close(); }
 }
