@@ -44,8 +44,29 @@ class WebSocketTests(HAStubTestCase):
         self.variable = self.protocol.Variable("Value", 0, self.protocol.VarType.INT16)
         self.client = SimpleNamespace(read_variable=AsyncMock(), write_variable=AsyncMock())
         self.entry = SimpleNamespace(title="Test PLC", data={"password": "private-secret"})
+        self.registry_entries = {}
+        self.registry_listeners = {}
+        self.registry = SimpleNamespace(async_get=self.registry_entries.get)
+        self.registry_api = SimpleNamespace(
+            EVENT_ENTITY_REGISTRY_UPDATED="entity_registry_updated",
+            async_get=Mock(return_value=self.registry),
+            async_entries_for_config_entry=Mock(side_effect=lambda registry, entry_id: [
+                entity for entity in self.registry_entries.values()
+                if entity.config_entry_id == entry_id]),
+        )
+        context = patch.object(self.websocket, "er", self.registry_api)
+        context.start()
+        self.addCleanup(context.stop)
+
+        def listen(event_type, listener):
+            self.assertEqual(event_type, "entity_registry_updated")
+            token = object()
+            self.registry_listeners[token] = listener
+            return lambda: self.registry_listeners.pop(token)
+
         self.hass = SimpleNamespace(
             data={"amit": {}},
+            bus=SimpleNamespace(async_listen=Mock(side_effect=listen)),
             async_create_background_task=lambda coro, name: asyncio.create_task(coro, name=name),
             config_entries=SimpleNamespace(async_get_entry=Mock(return_value=self.entry)),
         )
@@ -60,8 +81,25 @@ class WebSocketTests(HAStubTestCase):
     def connection_stub(self):
         connection = SimpleNamespace(user=SimpleNamespace(is_admin=True), subscriptions={},
                                      send_result=Mock(), send_event=Mock(), send_error=Mock())
-        self.addCleanup(connection.subscriptions.clear)
+        def close():
+            for unsubscribe in list(connection.subscriptions.values()):
+                unsubscribe()
+            connection.subscriptions.clear()
+        self.addCleanup(close)
         return connection
+
+    def registry_entity(self, entity_id="sensor.custom", unique_id="first_0",
+                        entry_id="first", name="Room temperature", original_name="Value",
+                        disabled_by=None, platform="amit"):
+        entity = SimpleNamespace(entity_id=entity_id, unique_id=unique_id,
+                                 config_entry_id=entry_id, name=name, original_name=original_name,
+                                 disabled_by=disabled_by, platform=platform)
+        self.registry_entries[entity_id] = entity
+        return entity
+
+    def registry_event(self, entity_id="sensor.custom", action="update", **data):
+        for listener in list(self.registry_listeners.values()):
+            listener(SimpleNamespace(data={"entity_id": entity_id, "action": action, **data}))
 
     def subscribe(self, connection=None, entry_id="first", msg_id=1):
         self.websocket.websocket_subscribe(self.hass, connection or self.connection,
@@ -83,6 +121,8 @@ class WebSocketTests(HAStubTestCase):
         self.assertEqual(self.connection.subscriptions, {})
         self.connection.send_result.assert_not_called()
         self.client.read_variable.assert_not_awaited()
+        self.registry_api.async_get.assert_not_called()
+        self.hass.bus.async_listen.assert_not_called()
 
     async def test_list_omits_secrets_unavailable_and_closed_entries(self):
         self.hass.data["amit"]["unavailable"] = {"client": self.client}
@@ -182,6 +222,167 @@ class WebSocketTests(HAStubTestCase):
         self.subscribe(msg_id=2)
         self.connection.send_error.assert_called_once_with(
             2, "not_found", "Requested PLC is not loaded")
+
+    async def test_snapshot_lists_all_supported_entity_identities_and_disabled_entries(self):
+        self.entry.data["variables"] = ["0"]
+        self.registry_entity()
+        self.registry_entity("number.other_name", "first_0_number", name=None,
+                             original_name="Original number", disabled_by="user")
+        self.registry_entity("switch.control", "first_0_switch", name=None, original_name=None)
+        self.registry_entity("binary_sensor.state", "first_0_binary", name="State")
+        self.subscribe()
+        variable = self.connection.send_event.call_args.args[1]["variables"][0]
+        self.assertTrue(variable["configured"])
+        entities = variable["entities"]
+        self.assertEqual([e["entity_id"] for e in entities], sorted(self.registry_entries))
+        self.assertEqual(entities[1], {"entity_id": "number.other_name", "name": "Original number",
+                                      "custom_name": None, "disabled": True})
+        self.assertEqual(entities[2]["custom_name"], "Room temperature")
+        self.assertEqual(entities[3]["name"], "Value")
+        self.assertNotIn("private-secret", json.dumps(variable))
+
+    async def test_configured_selection_is_independent_of_registry_existence(self):
+        extra = self.protocol.Variable("No entity", 2, self.protocol.VarType.FLOAT)
+        array = self.protocol.Variable("Array", 3, self.protocol.VarType.ARRAY)
+        self.monitor.update_catalog([self.variable, extra, array])
+        self.registry_entity(disabled_by="integration")
+        self.entry.data["variables"] = ["2"]
+        self.subscribe()
+        variables = self.connection.send_event.call_args.args[1]["variables"]
+        self.assertEqual([v["configured"] for v in variables], [False, True, False])
+        self.assertTrue(variables[0]["entities"][0]["disabled"])
+        self.assertEqual(variables[1]["entities"], [])
+        self.connection.subscriptions.pop(1)()
+        self.entry.data["variables"] = []  # Setup uses all readable variables as its fallback.
+        self.subscribe(msg_id=2)
+        self.assertEqual([v["configured"] for v in self.connection.send_event.call_args.args[1]["variables"]],
+                         [True, True, False])
+
+    async def test_exact_identity_matching_rejects_other_plcs_platforms_and_buttons(self):
+        self.registry_entity()
+        self.registry_entity("sensor.second", "second_0", entry_id="second")
+        self.registry_entity("sensor.foreign", "first_0", platform="other")
+        self.registry_entity("sensor.wrong_suffix", "first_0_number")
+        self.registry_entity("sensor.wrong_prefix", "not_first_0")
+        self.registry_entity("sensor.other_variable", "first_99")
+        self.registry_entity("button.reload", "first_reload_variables", name="Reload")
+        self.registry_entity("sensor.numeric_part", "first_99_0")
+        self.subscribe()
+        entities = self.connection.send_event.call_args.args[1]["variables"][0]["entities"]
+        self.assertEqual([e["entity_id"] for e in entities], ["sensor.custom"])
+
+    async def test_registry_changes_are_metadata_only_and_keep_samples_and_revisions(self):
+        entity = self.registry_entity()
+        self.subscribe()
+        self.monitor.record(self.variable, 5)
+        before = self.monitor.snapshot()
+        for name, disabled_by in (("Renamed", None), (None, "user"), ("Value", None)):
+            entity.name, entity.disabled_by = name, disabled_by
+            self.registry_event(changes={"name": "Previous"})
+            event = self.connection.send_event.call_args.args[1]
+            self.assertEqual(event, {"kind": "entity_metadata", "runtime_id": self.monitor.runtime_id,
+                             "variables": [{"wid": 0, "configured": True, "entities": [{
+                                 "entity_id": "sensor.custom", "name": name or "Value",
+                                 "custom_name": name, "disabled": disabled_by is not None}]}]})
+            self.assertEqual(self.monitor.snapshot(), before)
+        self.client.read_variable.assert_not_awaited()
+        self.client.write_variable.assert_not_awaited()
+
+    async def test_entity_id_rename_and_removal_use_previous_binding(self):
+        entity = self.registry_entity()
+        self.subscribe()
+        del self.registry_entries[entity.entity_id]
+        entity.entity_id = "sensor.renamed"
+        self.registry_entries[entity.entity_id] = entity
+        self.registry_event(entity.entity_id, old_entity_id="sensor.custom")
+        event = self.connection.send_event.call_args.args[1]
+        self.assertEqual(event["kind"], "entity_metadata")
+        self.assertEqual(event["variables"][0]["entities"][0]["entity_id"], "sensor.renamed")
+        del self.registry_entries[entity.entity_id]
+        self.registry_event(entity.entity_id, action="remove")
+        self.assertEqual(self.connection.send_event.call_args.args[1]["variables"],
+                         [{"wid": 0, "configured": True, "entities": []}])
+
+    async def test_created_entity_and_catalog_replacement_refresh_metadata(self):
+        self.subscribe()
+        self.registry_entity()
+        self.registry_event(action="create")
+        self.assertEqual(self.connection.send_event.call_args.args[1]["kind"], "entity_metadata")
+        new = self.protocol.Variable("New", 2, self.protocol.VarType.FLOAT)
+        self.registry_entity("number.new", "first_2_number", name="New label")
+        self.monitor.update_catalog([new])
+        catalog = self.connection.send_event.call_args.args[1]
+        self.assertEqual(catalog["kind"], "catalog")
+        self.assertEqual([v["wid"] for v in catalog["variables"]], [2])
+        self.assertEqual(catalog["variables"][0]["entities"][0]["name"], "New label")
+        self.registry_entries["number.new"].name = "Latest label"
+        self.registry_event("number.new")
+        changes = self.connection.send_event.call_args.args[1]["variables"]
+        self.assertEqual([v["wid"] for v in changes], [2])
+        self.assertEqual(changes[0]["entities"][0]["name"], "Latest label")
+
+    async def test_unrelated_and_unchanged_registry_events_do_not_emit(self):
+        self.registry_entity()
+        self.subscribe()
+        count = self.registry_api.async_entries_for_config_entry.call_count
+        self.registry_entity("sensor.second", "second_0", entry_id="second")
+        self.registry_event("sensor.second")
+        self.assertEqual(self.registry_api.async_entries_for_config_entry.call_count, count)
+        self.registry_event(changes={"icon": "mdi:test"})
+        self.assertEqual(self.connection.send_event.call_count, 1)
+
+    async def test_registry_updates_stay_isolated_between_plcs_with_the_same_wid(self):
+        self.registry_entity()
+        other_entity = self.registry_entity("sensor.second", "second_0", entry_id="second")
+        other = self.monitor_module.AMiTMonitor(
+            self.hass, self.client, [self.variable], [self.variable], 30)
+        self.addAsyncCleanup(other.async_close)
+        self.hass.data["amit"]["second"] = {"monitor": other}
+        self.subscribe()
+        self.subscribe(entry_id="second", msg_id=2)
+        self.connection.send_event.reset_mock()
+        other_entity.name = "Other room"
+        self.registry_event("sensor.second")
+        self.assertEqual(self.connection.send_event.call_count, 1)
+        msg_id, event = self.connection.send_event.call_args.args
+        self.assertEqual(msg_id, 2)
+        self.assertEqual(event["runtime_id"], other.runtime_id)
+
+    async def test_unsubscribe_and_unload_release_registry_listeners_once(self):
+        self.registry_entity()
+        self.subscribe()
+        second = self.connection_stub()
+        self.subscribe(connection=second)
+        self.assertEqual(len(self.registry_listeners), 2)
+        stale_callback = next(iter(self.registry_listeners.values()))
+        unsubscribe = self.connection.subscriptions.pop(1)
+        unsubscribe()
+        unsubscribe()
+        self.assertEqual(len(self.registry_listeners), 1)
+        self.connection.send_event.reset_mock()
+        self.registry_entries["sensor.custom"].name = "Changed"
+        stale_callback(SimpleNamespace(data={"entity_id": "sensor.custom"}))
+        self.connection.send_event.assert_not_called()
+        self.registry_event()
+        self.assertEqual(second.send_event.call_args.args[1]["kind"], "entity_metadata")
+        await self.monitor.async_close()
+        self.assertEqual(self.registry_listeners, {})
+        self.assertEqual(second.subscriptions, {})
+
+    async def test_failed_initial_send_releases_both_subscriptions(self):
+        self.connection.send_event.side_effect = RuntimeError("Connection closed")
+        with self.assertRaisesRegex(RuntimeError, "Connection closed"):
+            self.subscribe()
+        self.assertEqual(self.registry_listeners, {})
+        self.assertEqual(self.monitor._listeners, {})
+        self.assertEqual(self.connection.subscriptions, {})
+
+    async def test_failed_unload_notification_still_releases_registry_listener(self):
+        self.subscribe()
+        self.connection.send_event.side_effect = RuntimeError("Connection closed")
+        await self.monitor.async_close()
+        self.assertEqual(self.registry_listeners, {})
+        self.assertEqual(self.connection.subscriptions, {})
 
 
 if __name__ == "__main__":

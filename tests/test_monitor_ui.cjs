@@ -43,7 +43,7 @@ async function mount(browser, options = {}) {
       timestamp: new Date(Date.now() - 60000 + fixture.sequence * 1000).toISOString(),
     });
     fixture.snapshot = entry => ({ kind: "snapshot", runtime_id: `runtime-${entry}`, sequence: fixture.sequence,
-      variables: fixture.variables, scan_interval: 30,
+      variables: fixture.variables.map(v => ({ ...v, configured: false, entities: [] })), scan_interval: 30,
       samples: [{ ...fixture.reading(4101, 22.4), sequence: fixture.sequence }],
     });
     fixture.connection = {
@@ -146,6 +146,17 @@ async function run() {
       assert.equal((paths[0].match(/M/g) || []).length, 2);
       assert.ok(paths[1].includes("H") && paths[1].includes("V"));
       assert.equal(await page.locator("amit-monitor-panel .chart").first().locator("circle").count(), 1);
+      const beforeMetadata = await page.evaluate(() => JSON.stringify([...panel.model.selected]));
+      await page.evaluate(() => {
+        for (const active of fixture.active.values()) active.callback({
+          kind: "entity_metadata", runtime_id: `runtime-${active.entry}`,
+          variables: [{ wid: 4101, configured: true, entities: [
+            { entity_id: "sensor.renamed", name: "New name", custom_name: "New name", disabled: false },
+          ] }],
+        });
+      });
+      assert.equal(await page.evaluate(() => JSON.stringify([...panel.model.selected])), beforeMetadata,
+        "Entity metadata must preserve recorded samples and pending graph gaps");
       const range = page.getByRole("slider", { name: "Vzorek: TE_obyvak", exact: true });
       await range.focus(); await range.press("Home");
       assert.equal(await range.getAttribute("aria-valuetext").then(v => v.includes("22,5")), true);
