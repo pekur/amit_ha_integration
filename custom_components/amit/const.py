@@ -1,6 +1,7 @@
 """Constants for AMiT integration."""
 
 DOMAIN = "amit"
+MONITOR_ADDITIONS = "amit_monitor_additions"
 
 # Configuration keys
 CONF_HOST = "host"

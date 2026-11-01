@@ -107,6 +107,43 @@ class FrontendTests(HAStubTestCase):
         await self.frontend.async_update_panel(self.hass)
         self.frontend_api.async_remove_panel.assert_not_called()
 
+    async def test_last_plc_addition_keeps_panel_during_reload_and_setup_retry(self):
+        self.load_entry()
+        entry = SimpleNamespace(disabled_by=None)
+        self.hass.config_entries = SimpleNamespace(async_get_entry=Mock(return_value=entry))
+        await self.frontend.async_setup_frontend(self.hass)
+        await self.frontend_ready()
+        self.hass.data["amit"].clear()
+        operation = {"status": "saved"}
+        self.hass.data[self.frontend.MONITOR_ADDITIONS] = {"first": operation}
+        for status in ("saved", "reloading", "pending", "failed"):
+            operation["status"] = status
+            await self.frontend.async_update_panel(self.hass)
+            self.frontend_api.async_remove_panel.assert_not_called()
+        self.load_entry()
+        operation["status"] = "loaded"
+        await self.frontend.async_update_panel(self.hass)
+        self.frontend_api.async_remove_panel.assert_not_called()
+        self.hass.data["amit"].clear()
+        await self.frontend.async_update_panel(self.hass)
+        self.frontend_api.async_remove_panel.assert_called_once()
+
+    async def test_pending_addition_does_not_keep_panel_for_disabled_or_removed_entry(self):
+        for entry in (None, SimpleNamespace(disabled_by="user")):
+            with self.subTest(entry=entry):
+                self.hass.config_entries = SimpleNamespace(async_get_entry=Mock(return_value=entry))
+                self.hass.data[self.frontend.MONITOR_ADDITIONS] = {"first": {"status": "pending"}}
+                self.load_entry()
+                if not self.callbacks:
+                    await self.frontend.async_setup_frontend(self.hass)
+                    await self.frontend_ready()
+                else:
+                    await self.frontend.async_update_panel(self.hass)
+                self.frontend_api.async_remove_panel.reset_mock()
+                self.hass.data["amit"].clear()
+                await self.frontend.async_update_panel(self.hass)
+                self.frontend_api.async_remove_panel.assert_called_once()
+
     async def test_missing_asset_does_not_register_a_broken_panel(self):
         self.load_entry()
         self.hass.async_add_executor_job.side_effect = FileNotFoundError("Missing packaged asset")

@@ -1,20 +1,23 @@
 """Authenticated live monitor commands. No PLC writes or stored history."""
 from __future__ import annotations
 
+import asyncio
 from hashlib import sha256
 import hmac
 import json
-from secrets import token_bytes
+from secrets import token_bytes, token_hex
 from time import time
 
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
-from .const import CONF_VARIABLES, DOMAIN
+from .const import CONF_VARIABLES, DOMAIN, MONITOR_ADDITIONS
 from .config_flow import preview_variable_addition
+from .frontend import async_update_panel
 
 _PREVIEW_KEY = "amit_monitor_preview_key"
 _PREVIEW_SECONDS = 300
@@ -76,6 +79,8 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_list)
     websocket_api.async_register_command(hass, websocket_subscribe)
     websocket_api.async_register_command(hass, websocket_preview_add)
+    websocket_api.async_register_command(hass, websocket_confirm_add)
+    websocket_api.async_register_command(hass, websocket_addition_status)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "amit/monitor/list"})
@@ -103,29 +108,35 @@ def websocket_list(hass, connection, msg) -> None:
 @callback
 def websocket_preview_add(hass, connection, msg) -> None:
     """Preview permanent additions. No configuration, reload, or PLC requests."""
+    try:
+        _, _, result = _addition_preview(hass, connection, msg, int(time()) + _PREVIEW_SECONDS)
+    except ValueError as err:
+        connection.send_error(msg["id"], str(err), "Cannot prepare this selection")
+        return
+    connection.send_result(msg["id"], result)
+
+
+@callback
+def _addition_preview(hass, connection, msg, expires_at):
+    """Rebuild the same proposal for preview and atomic confirmation."""
     data = hass.data.get(DOMAIN, {}).get(msg["entry_id"], {})
     monitor = data.get("monitor")
     entry = hass.config_entries.async_get_entry(msg["entry_id"])
     if monitor is None or monitor.closed or entry is None:
-        connection.send_error(msg["id"], "not_found", "Requested PLC is not loaded")
-        return
+        raise ValueError("not_found")
     snapshot = monitor.snapshot()
     if msg["runtime_id"] != snapshot["runtime_id"]:
-        connection.send_error(msg["id"], "stale_selection", "PLC runtime has changed")
-        return
+        raise ValueError("stale_selection")
     requested = msg["variables"]
     if not isinstance(requested, list) or not requested or len(requested) > 65536:
-        connection.send_error(msg["id"], "invalid_selection", "Select readable PLC variables")
-        return
+        raise ValueError("invalid_selection")
     catalog = {v["wid"]: v for v in snapshot["variables"]}
     for item in requested:
         if (not isinstance(item, dict) or type(item.get("wid")) is not int
                 or type(item.get("revision")) is not int or item["wid"] not in catalog):
-            connection.send_error(msg["id"], "invalid_selection", "Invalid variable selection")
-            return
+            raise ValueError("invalid_selection")
         if item["revision"] != catalog[item["wid"]]["revision"]:
-            connection.send_error(msg["id"], "stale_selection", "PLC variable definition has changed")
-            return
+            raise ValueError("stale_selection")
     try:
         proposal = preview_variable_addition(
             dict(entry.data), data["all_variables"], [v["wid"] for v in requested],
@@ -133,21 +144,141 @@ def websocket_preview_add(hass, connection, msg) -> None:
         )
     except (ValueError, TypeError) as err:
         code = "invalid_selection" if str(err) == "invalid_selection" else "invalid_configuration"
-        connection.send_error(msg["id"], code, "Cannot prepare this selection")
-        return
+        raise ValueError(code) from err
     metadata = _entity_metadata(hass, er.async_get(hass), msg["entry_id"], snapshot["variables"])
     overview = set(proposal["requested_wids"]) | set(proposal["newly_monitored_wids"])
     missing = [wid for wid in proposal["requested_wids"] if not metadata[wid]["entities"]]
     result = {
         **proposal, "entry_id": msg["entry_id"], "runtime_id": monitor.runtime_id,
-        "expires_at": int(time()) + _PREVIEW_SECONDS,
+        "expires_at": expires_at,
         "missing_entity_wids": missing,
         "requires_reload": bool(proposal["added_wids"] or proposal["newly_monitored_wids"]
                                 or proposal["removed_write_wids"] or missing),
         "variables": [dict(v, **metadata[v["wid"]]) for v in snapshot["variables"] if v["wid"] in overview],
     }
     result["preview_id"] = _preview_signature(hass, connection, entry, data, snapshot, result)
-    connection.send_result(msg["id"], result)
+    return entry, data, result
+
+
+def _configuration_signature(entry):
+    return sha256(json.dumps(
+        [dict(entry.data), dict(getattr(entry, "options", {}))],
+        sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()
+
+
+def _addition_result(operation):
+    return {key: value for key, value in operation.items() if not key.startswith("_")}
+
+
+@callback
+def _refresh_addition_status(hass, operation):
+    """A retryable setup can finish after the reload coroutine returns."""
+    if operation["status"] not in ("pending", "loaded"):
+        return
+    entry = hass.config_entries.async_get_entry(operation["entry_id"])
+    if entry is None or _configuration_signature(entry) != operation["_configuration"]:
+        operation.update(status="failed", error="configuration_changed")
+        return
+    monitor = hass.data.get(DOMAIN, {}).get(operation["entry_id"], {}).get("monitor")
+    if monitor is not None and not monitor.closed and monitor.runtime_id != operation["_runtime_id"]:
+        operation.update(status="loaded", error=None)
+
+
+async def _async_reload_addition(hass, operation):
+    """Finish a saved change independently of the browser connection."""
+    operation["status"] = "reloading"
+    try:
+        entry = hass.config_entries.async_get_entry(operation["entry_id"])
+        if entry is None or _configuration_signature(entry) != operation["_configuration"]:
+            operation.update(status="failed", error="configuration_changed")
+            return
+        reloaded = await hass.config_entries.async_reload(operation["entry_id"])
+        entry = hass.config_entries.async_get_entry(operation["entry_id"])
+        retrying = entry is not None and getattr(entry, "state", None) == ConfigEntryState.SETUP_RETRY
+        operation.update(status="pending" if reloaded or retrying else "failed",
+                         error=None if reloaded or retrying else "reload_failed")
+        _refresh_addition_status(hass, operation)
+    except asyncio.CancelledError:
+        operation.update(status="failed", error="reload_cancelled")
+        raise
+    except Exception:
+        operation.update(status="failed", error="reload_failed")
+    finally:
+        await async_update_panel(hass)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "amit/monitor/confirm_add",
+    vol.Required("entry_id"): str,
+    vol.Required("runtime_id"): str,
+    vol.Required("variables"): [{vol.Required("wid"): int, vol.Required("revision"): int}],
+    vol.Required("expires_at"): int,
+    vol.Required("preview_id"): str,
+})
+@websocket_api.require_admin
+@callback
+def websocket_confirm_add(hass, connection, msg) -> None:
+    """Validate and save in one event-loop turn, then reload only this entry."""
+    operations = hass.data.setdefault(MONITOR_ADDITIONS, {})
+    previous = operations.get(msg["entry_id"])
+    if previous and previous["status"] in ("saved", "reloading"):
+        connection.send_error(msg["id"], "busy", "A saved addition is still loading")
+        return
+    expires_at = msg["expires_at"]
+    if type(expires_at) is not int or not time() < expires_at <= time() + _PREVIEW_SECONDS:
+        connection.send_error(msg["id"], "expired_preview", "Prepare a new preview")
+        return
+    try:
+        entry, _, preview = _addition_preview(hass, connection, msg, expires_at)
+    except ValueError as err:
+        connection.send_error(msg["id"], str(err), "Prepare a new preview")
+        return
+    if not isinstance(msg["preview_id"], str) or not hmac.compare_digest(
+            msg["preview_id"].encode(), preview["preview_id"].encode()):
+        connection.send_error(msg["id"], "stale_preview", "Prepare a new preview")
+        return
+    if not preview["requires_reload"]:
+        connection.send_result(msg["id"], {"entry_id": msg["entry_id"], "status": "unchanged", "saved": False})
+        return
+    new_data = {**entry.data, **preview["config_patch"]}
+    try:
+        hass.config_entries.async_update_entry(entry, data=new_data)
+    except Exception:
+        connection.send_error(msg["id"], "save_failed", "Configuration was not saved")
+        return
+    operation = {
+        "entry_id": msg["entry_id"], "operation_id": token_hex(16),
+        "status": "saved", "saved": True, "error": None,
+        "_user_id": connection.user.id, "_runtime_id": msg["runtime_id"],
+        "_configuration": _configuration_signature(entry),
+    }
+    operations[msg["entry_id"]] = operation
+    reload_task = _async_reload_addition(hass, operation)
+    try:
+        hass.async_create_background_task(reload_task, "AMiT entity addition")
+    except Exception:
+        reload_task.close()
+        operation.update(status="failed", error="reload_failed")
+    connection.send_result(msg["id"], _addition_result(operation))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "amit/monitor/addition_status",
+    vol.Required("entry_id"): str,
+    vol.Required("operation_id"): str,
+})
+@websocket_api.require_admin
+@callback
+def websocket_addition_status(hass, connection, msg) -> None:
+    """Read a saved operation after reload or browser reconnection."""
+    operation = hass.data.get(MONITOR_ADDITIONS, {}).get(msg["entry_id"])
+    if (operation is None or operation["operation_id"] != msg["operation_id"]
+            or operation["_user_id"] != connection.user.id):
+        connection.send_error(msg["id"], "not_found", "Requested operation was not found")
+        return
+    _refresh_addition_status(hass, operation)
+    connection.send_result(msg["id"], _addition_result(operation))
 
 
 @websocket_api.websocket_command({

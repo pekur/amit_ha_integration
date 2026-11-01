@@ -109,16 +109,19 @@ class WebSocketTests(HAStubTestCase):
 
     async def test_registration_is_separate_from_loading_or_unloading_plcs(self):
         self.websocket.async_register_commands(self.hass)
-        self.assertEqual(self.api.async_register_command.call_count, 3)
+        self.assertEqual(self.api.async_register_command.call_count, 5)
         handlers = [c.args[1] for c in self.api.async_register_command.call_args_list]
         self.assertEqual(handlers, [self.websocket.websocket_list,
-                                    self.websocket.websocket_subscribe, self.websocket.websocket_preview_add])
+                                    self.websocket.websocket_subscribe, self.websocket.websocket_preview_add,
+                                    self.websocket.websocket_confirm_add, self.websocket.websocket_addition_status])
 
     async def test_nonadmin_cannot_list_or_subscribe(self):
         self.connection.user.is_admin = False
         for handler, msg in ((self.websocket.websocket_list, {"id": 1}),
                              (self.websocket.websocket_subscribe, {"id": 2, "entry_id": "first"}),
-                             (self.websocket.websocket_preview_add, {"id": 3, "entry_id": "first"})):
+                             (self.websocket.websocket_preview_add, {"id": 3, "entry_id": "first"}),
+                             (self.websocket.websocket_confirm_add, {"id": 4, "entry_id": "first"}),
+                             (self.websocket.websocket_addition_status, {"id": 5, "entry_id": "first"})):
             with self.assertRaises(PermissionError):
                 handler(self.hass, self.connection, msg)
         self.assertEqual(self.connection.subscriptions, {})
@@ -408,6 +411,259 @@ class WebSocketTests(HAStubTestCase):
         connection.send_error.reset_mock()
         self.websocket.websocket_preview_add(self.hass, connection, message or self.addition_message())
         return connection.send_result.call_args.args[1] if connection.send_result.called else None
+
+    def confirmation_setup(self, wids=(1,)):
+        self.addition_setup()
+        self.tasks = []
+
+        def create_task(coro, name):
+            task = asyncio.create_task(coro, name=name)
+            self.tasks.append(task)
+            return task
+
+        self.hass.async_create_background_task = create_task
+        self.hass.config_entries.async_update_entry.side_effect = lambda entry, *, data: setattr(entry, "data", data)
+        message = self.addition_message(wids)
+        preview = self.addition_preview(message)
+        return {**message, "type": "amit/monitor/confirm_add", "expires_at": preview["expires_at"],
+                "preview_id": preview["preview_id"]}
+
+    def confirm_addition(self, message):
+        self.connection.send_result.reset_mock()
+        self.connection.send_error.reset_mock()
+        self.websocket.websocket_confirm_add(self.hass, self.connection, message)
+        return self.connection.send_result.call_args.args[1] if self.connection.send_result.called else None
+
+    def addition_status(self, operation, connection=None):
+        connection = connection or self.connection
+        connection.send_result.reset_mock()
+        connection.send_error.reset_mock()
+        self.websocket.websocket_addition_status(self.hass, connection, {
+            "id": 100, "entry_id": operation["entry_id"], "operation_id": operation["operation_id"]})
+        return connection.send_result.call_args.args[1] if connection.send_result.called else None
+
+    async def replacement_runtime(self, entry_id):
+        self.assertEqual(entry_id, "first")
+        await self.monitor.async_close()
+        replacement = self.monitor_module.AMiTMonitor(
+            self.hass, self.client, [self.variable, self.extra], [self.variable, self.extra], 30)
+        self.addAsyncCleanup(replacement.async_close)
+        self.hass.data["amit"]["first"]["monitor"] = replacement
+        return True
+
+    async def test_confirm_saves_additively_before_reloading_only_the_selected_entry(self):
+        message = self.confirmation_setup()
+        self.entry.data["custom_names"] = {"0": "Custom"}
+        message.update({key: self.addition_preview()[key] for key in ("preview_id", "expires_at")})
+        original = dict(self.entry.data)
+        other = {"monitor": SimpleNamespace(closed=False)}
+        self.hass.data["amit"]["second"] = other
+        self.hass.config_entries.async_reload.side_effect = self.replacement_runtime
+        operation = self.confirm_addition(message)
+        self.assertEqual(operation["status"], "saved")
+        self.assertTrue(operation["saved"])
+        self.hass.config_entries.async_reload.assert_not_awaited()
+        self.assertEqual(self.entry.data, {**original, "variables": ["0", "1"], "writable_variables": ["0"]})
+        await asyncio.gather(*self.tasks)
+        self.assertEqual(self.addition_status(operation)["status"], "loaded")
+        self.hass.config_entries.async_reload.assert_awaited_once_with("first")
+        self.assertIs(self.hass.data["amit"]["second"], other)
+        self.client.write_variable.assert_not_awaited()
+        self.client.read_variable.assert_not_awaited()
+        encoded = json.dumps(self.addition_status(operation))
+        for hidden in ("private-secret", "_configuration", "custom_names", "_user_id", "preview_id"):
+            self.assertNotIn(hidden, encoded)
+
+    async def test_confirm_rejects_changed_configuration_catalog_registry_and_user(self):
+        for change in ("data", "options", "catalog", "registry", "user", "writable", "runtime"):
+            with self.subTest(change=change):
+                self.setUp()
+                message = self.confirmation_setup()
+                if change == "data":
+                    self.entry.data["scan_interval"] = 60
+                elif change == "options":
+                    self.entry.options = {"changed": True}
+                elif change == "catalog":
+                    self.extra.name = "Changed"
+                    self.monitor.update_catalog([self.variable, self.extra, self.array])
+                elif change == "registry":
+                    self.registry_entity("sensor.new", "first_1")
+                elif change == "user":
+                    self.connection.user.id = "other-admin"
+                elif change == "writable":
+                    self.hass.data["amit"]["first"]["writable_wids"].clear()
+                else:
+                    message["runtime_id"] = "old-runtime"
+                before = json.dumps(self.entry.data, sort_keys=True)
+                self.assertIsNone(self.confirm_addition(message))
+                self.assertIn(self.connection.send_error.call_args.args[1], ("stale_preview", "stale_selection"))
+                self.assertEqual(json.dumps(self.entry.data, sort_keys=True), before)
+                self.hass.config_entries.async_update_entry.assert_not_called()
+                self.hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_confirm_rejects_expired_tampered_and_invalid_selections(self):
+        message = self.confirmation_setup()
+        cases = [({"expires_at": 0}, "expired_preview"),
+                 ({"expires_at": True}, "expired_preview"),
+                 ({"expires_at": message["expires_at"] + 1000}, "expired_preview"),
+                 ({"preview_id": "wrong"}, "stale_preview"),
+                 ({"preview_id": "ž"}, "stale_preview"),
+                 ({"variables": []}, "invalid_selection"),
+                 ({"variables": [{"wid": 2, "revision": 3}]}, "invalid_selection")]
+        for patch_data, code in cases:
+            with self.subTest(patch_data=patch_data):
+                self.assertIsNone(self.confirm_addition({**message, **patch_data}))
+                self.assertEqual(self.connection.send_error.call_args.args[1], code)
+        self.hass.config_entries.async_update_entry.assert_not_called()
+        self.assertEqual(self.tasks, [])
+
+    async def test_confirm_is_atomic_for_two_requests_and_does_not_replay_after_reload(self):
+        message = self.confirmation_setup()
+        self.hass.config_entries.async_reload.side_effect = self.replacement_runtime
+        first = self.confirm_addition(message)
+        self.assertIsNone(self.confirm_addition(message))
+        self.assertEqual(self.connection.send_error.call_args.args[1], "busy")
+        await asyncio.gather(*self.tasks)
+        self.assertEqual(self.addition_status(first)["status"], "loaded")
+        self.assertIsNone(self.confirm_addition(message))
+        self.assertEqual(self.connection.send_error.call_args.args[1], "stale_selection")
+        self.hass.config_entries.async_update_entry.assert_called_once()
+        self.hass.config_entries.async_reload.assert_awaited_once()
+
+    async def test_confirm_noop_does_not_save_reload_or_enable_disabled_entities(self):
+        message = self.confirmation_setup((0,))
+        self.entry.data["writable_variables"] = ["0"]
+        self.registry_entries["sensor.custom"].disabled_by = "user"
+        preview = self.addition_preview(self.addition_message((0,)))
+        message.update(preview_id=preview["preview_id"], expires_at=preview["expires_at"])
+        result = self.confirm_addition(message)
+        self.assertEqual(result["status"], "unchanged")
+        self.assertFalse(result["saved"])
+        self.assertEqual(self.registry_entries["sensor.custom"].disabled_by, "user")
+        self.hass.config_entries.async_update_entry.assert_not_called()
+        self.assertEqual(self.tasks, [])
+
+    async def test_confirm_preserves_all_mode_and_removes_stale_write_permissions(self):
+        message = self.confirmation_setup()
+        self.entry.data["variables"] = []
+        preview = self.addition_preview()
+        message.update(preview_id=preview["preview_id"], expires_at=preview["expires_at"])
+        operation = self.confirm_addition(message)
+        self.assertEqual(self.entry.data["variables"], [])
+        self.assertEqual(self.entry.data["writable_variables"], ["0"])
+        await asyncio.gather(*self.tasks)
+        self.assertTrue(self.addition_status(operation)["saved"])
+
+    async def test_failed_save_does_not_start_reload(self):
+        message = self.confirmation_setup()
+        before = dict(self.entry.data)
+        self.hass.config_entries.async_update_entry.side_effect = ValueError("Cannot save")
+        self.assertIsNone(self.confirm_addition(message))
+        self.assertEqual(self.connection.send_error.call_args.args[1], "save_failed")
+        self.assertEqual(self.entry.data, before)
+        self.assertEqual(self.tasks, [])
+
+    async def test_reload_failure_keeps_saved_configuration_and_reports_failure(self):
+        for failure in (False, RuntimeError("Reload failed"), asyncio.CancelledError()):
+            with self.subTest(failure=type(failure).__name__):
+                self.setUp()
+                message = self.confirmation_setup()
+                if failure is False:
+                    self.hass.config_entries.async_reload.return_value = False
+                else:
+                    self.hass.config_entries.async_reload.side_effect = failure
+                operation = self.confirm_addition(message)
+                await asyncio.gather(*self.tasks, return_exceptions=True)
+                result = self.addition_status(operation)
+                self.assertEqual(result["status"], "failed")
+                self.assertTrue(result["saved"])
+                self.assertEqual(self.entry.data["variables"], ["0", "1"])
+                self.assertEqual(self.entry.data["writable_variables"], ["0"])
+
+    async def test_pending_reload_can_finish_later_and_status_survives_reconnection(self):
+        message = self.confirmation_setup()
+
+        async def pending(entry_id):
+            await self.monitor.async_close()
+            self.hass.data["amit"].pop(entry_id)
+            self.entry.state = self.websocket.ConfigEntryState.SETUP_RETRY
+            return False
+
+        self.hass.config_entries.async_reload.side_effect = pending
+        operation = self.confirm_addition(message)
+        await asyncio.gather(*self.tasks)
+        reconnected = self.connection_stub()
+        self.assertEqual(self.addition_status(operation, reconnected)["status"], "pending")
+        self.hass.data["amit"]["first"] = {}
+        await self.replacement_runtime("first")
+        self.assertEqual(self.addition_status(operation, reconnected)["status"], "loaded")
+
+    async def test_status_does_not_claim_success_after_another_configuration_change(self):
+        message = self.confirmation_setup()
+        operation = self.confirm_addition(message)
+        await asyncio.gather(*self.tasks)
+        self.entry.data["scan_interval"] = 60
+        result = self.addition_status(operation)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"], "configuration_changed")
+        self.assertEqual(self.entry.data["scan_interval"], 60)
+
+    async def test_task_creation_failure_still_reports_that_configuration_was_saved(self):
+        message = self.confirmation_setup()
+        self.hass.async_create_background_task = Mock(side_effect=RuntimeError("Task rejected"))
+        operation = self.confirm_addition(message)
+        self.assertEqual(operation["status"], "failed")
+        self.assertTrue(operation["saved"])
+        self.assertEqual(self.entry.data["variables"], ["0", "1"])
+        self.hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_configuration_changed_before_reload_starts_is_not_reloaded_or_overwritten(self):
+        message = self.confirmation_setup()
+        operation = self.confirm_addition(message)
+        self.entry.data["variables"] = ["0"]
+        self.entry.data["scan_interval"] = 60
+        await asyncio.gather(*self.tasks)
+        result = self.addition_status(operation)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"], "configuration_changed")
+        self.assertEqual(self.entry.data["variables"], ["0"])
+        self.assertEqual(self.entry.data["scan_interval"], 60)
+        self.hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_reload_continues_without_original_connection_and_blocks_another_confirm(self):
+        message = self.confirmation_setup()
+        started, finish = asyncio.Event(), asyncio.Event()
+
+        async def delayed_reload(entry_id):
+            started.set()
+            await finish.wait()
+            return await self.replacement_runtime(entry_id)
+
+        self.hass.config_entries.async_reload.side_effect = delayed_reload
+        operation = self.confirm_addition(message)
+        await started.wait()
+        try:
+            self.assertEqual(self.addition_status(operation)["status"], "reloading")
+            self.assertIsNone(self.confirm_addition(message))
+            self.assertEqual(self.connection.send_error.call_args.args[1], "busy")
+            self.connection.send_result.side_effect = RuntimeError("Connection closed")
+            self.connection.send_error.side_effect = RuntimeError("Connection closed")
+        finally:
+            finish.set()
+            await asyncio.gather(*self.tasks)
+        self.assertEqual(self.addition_status(operation, self.connection_stub())["status"], "loaded")
+        self.hass.config_entries.async_reload.assert_awaited_once_with("first")
+
+    async def test_operation_status_is_private_to_its_admin_and_entry(self):
+        message = self.confirmation_setup()
+        operation = self.confirm_addition(message)
+        await asyncio.gather(*self.tasks)
+        other = self.connection_stub()
+        other.user.id = "other-admin"
+        self.assertIsNone(self.addition_status(operation, other))
+        self.assertIsNone(self.addition_status({**operation, "entry_id": "second"}))
+        self.assertIsNone(self.addition_status({**operation, "operation_id": "unknown"}))
+        self.assertEqual(self.connection.send_error.call_args.args[1], "not_found")
 
     async def test_addition_preview_is_read_only_and_omits_credentials_and_values(self):
         self.addition_setup()

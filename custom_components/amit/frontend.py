@@ -6,7 +6,7 @@ from hashlib import sha256
 import logging
 from pathlib import Path
 
-from .const import DOMAIN
+from .const import DOMAIN, MONITOR_ADDITIONS
 
 _LOGGER = logging.getLogger(__name__)
 _DATA = "amit_frontend"
@@ -64,8 +64,16 @@ async def async_update_panel(hass) -> None:
             data.get("monitor") is not None and not data["monitor"].closed
             for data in hass.data.get(DOMAIN, {}).values()
         )
+        # Keep the last PLC's panel available while its saved addition reloads
+        # or waits for a retry, so the browser can read the operation outcome.
+        pending = any(
+            operation["status"] in ("saved", "reloading", "pending", "failed")
+            and (entry := hass.config_entries.async_get_entry(entry_id)) is not None
+            and not entry.disabled_by
+            for entry_id, operation in hass.data.get(MONITOR_ADDITIONS, {}).items()
+        )
         try:
-            if loaded and not state["registered"]:
+            if (loaded or pending) and not state["registered"]:
                 await panel_custom.async_register_panel(
                     hass=hass, frontend_url_path=_PANEL,
                     webcomponent_name="amit-monitor-panel", sidebar_title="AMiT Monitor",
@@ -73,7 +81,7 @@ async def async_update_panel(hass) -> None:
                     embed_iframe=False, require_admin=True,
                 )
                 state["registered"] = True
-            elif not loaded and state["registered"]:
+            elif not (loaded or pending) and state["registered"]:
                 frontend.async_remove_panel(hass, _PANEL)
                 state["registered"] = False
         except Exception:
