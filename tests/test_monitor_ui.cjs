@@ -33,7 +33,7 @@ async function mount(browser, options = {}) {
       { wid: 0, name: '<img src="bad" onerror="window.injected=true">', type: "Int", unit: null, revision: 7, readable: true },
     ];
     const fixture = window.fixture = {
-      sequence: 10, variables, active: new Map(), pending: [], nextId: 1, calls: 0,
+      sequence: 10, variables, entityMetadata: new Map(), active: new Map(), pending: [], nextId: 1, calls: 0,
       entries: [{ entry_id: "first", title: "Vytápění · Biosuntec" }, { entry_id: "second", title: "Vzduchotechnika · Generic" }],
       listeners: new Map(), deferSubscription: Boolean(options.deferSubscription),
     };
@@ -43,7 +43,7 @@ async function mount(browser, options = {}) {
       timestamp: new Date(Date.now() - 60000 + fixture.sequence * 1000).toISOString(),
     });
     fixture.snapshot = entry => ({ kind: "snapshot", runtime_id: `runtime-${entry}`, sequence: fixture.sequence,
-      variables: fixture.variables.map(v => ({ ...v, configured: false, entities: [] })), scan_interval: 30,
+      variables: fixture.variables.map(v => ({ ...v, configured: false, entities: [], ...fixture.entityMetadata.get(entry)?.get(v.wid) })), scan_interval: 30,
       samples: [{ ...fixture.reading(4101, 22.4), sequence: fixture.sequence }],
     });
     fixture.connection = {
@@ -65,6 +65,12 @@ async function mount(browser, options = {}) {
     };
     function assertType(actual, expected) { if (actual !== expected) throw Error(`Unexpected command ${actual}`); }
     fixture.emit = sample => { for (const active of fixture.active.values()) active.callback({ kind: "sample", runtime_id: `runtime-${active.entry}`, sample }); };
+    fixture.metadata = (variables, entry = "first") => {
+      if (!fixture.entityMetadata.has(entry)) fixture.entityMetadata.set(entry, new Map());
+      for (const variable of variables) fixture.entityMetadata.get(entry).set(variable.wid, variable);
+      for (const active of fixture.active.values()) if (active.entry === entry)
+        active.callback({ kind: "entity_metadata", runtime_id: `runtime-${entry}`, variables });
+    };
     fixture.event = name => { for (const cb of fixture.listeners.get(name) || []) cb(); };
     fixture.visibility = hidden => { window.fakeHidden = hidden; document.dispatchEvent(new Event("visibilitychange")); };
     window.panel = document.createElement("amit-monitor-panel");
@@ -78,7 +84,7 @@ async function mount(browser, options = {}) {
 
 async function select(page, name) {
   await page.getByRole("checkbox", { name: `Vybráno: ${name}`, exact: true }).check();
-  await page.waitForFunction(name => [...panel.model.selected.keys()].some(wid => panel.model.catalog.get(wid).name === name), name);
+  await page.waitForFunction(name => [...panel.model.selected.keys()].some(wid => panel._variableName(panel.model.catalog.get(wid)) === name), name);
 }
 
 async function theme(page, dark) {
@@ -151,7 +157,7 @@ async function run() {
         for (const active of fixture.active.values()) active.callback({
           kind: "entity_metadata", runtime_id: `runtime-${active.entry}`,
           variables: [{ wid: 4101, configured: true, entities: [
-            { entity_id: "sensor.renamed", name: "New name", custom_name: "New name", disabled: false },
+            { entity_id: "sensor.renamed", name: "TE_obyvak", custom_name: null, disabled: false },
           ] }],
         });
       });
@@ -292,6 +298,104 @@ async function run() {
       await page.waitForFunction(() => fixture.active.size === 1);
       assert.deepEqual(errors, []); assert.deepEqual(requests, []);
       results.push("151-variable pagination, graph pagination, keyboard focus, Int32 precision, extreme Float axes, pagehide/pageshow cleanup");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser);
+      await page.evaluate(() => fixture.metadata([
+        { wid: 4101, configured: true, entities: [
+          { entity_id: "sensor.living_room", name: "Teplota obýváku", custom_name: "Teplota obýváku", disabled: false },
+        ] },
+        { wid: 4102, configured: true, entities: [
+          { entity_id: "sensor.outdoor", name: "Venkovní teplota", custom_name: "Venkovní teplota", disabled: false },
+          { entity_id: "binary_sensor.outdoor_alarm", name: "Venkovní alarm", custom_name: "Venkovní alarm", disabled: true },
+        ] },
+        { wid: 4201, configured: true, entities: [] },
+      ]));
+      await page.waitForFunction(() => panel._rows.get(4101).name.textContent === "Teplota obýváku");
+      assert.ok((await page.locator("amit-monitor-panel tbody").textContent()).includes("Vybraná v konfiguraci HA · bez entity"));
+      assert.ok((await page.evaluate(() => panel._rows.get(4102).entities.textContent)).includes("Zakázaná"));
+      await select(page, "Teplota obýváku"); await select(page, "Zap_cerpadlo");
+      await page.evaluate(() => {
+        fixture.emit(fixture.reading(4101, 22)); fixture.emit(fixture.reading(4301, 0));
+        fixture.emit(fixture.reading(4101, 23)); fixture.emit(fixture.reading(4301, 1));
+      });
+      const haFilter = page.getByRole("combobox", { name: "Entity Home Assistantu", exact: true });
+      await haFilter.selectOption("ha");
+      await page.waitForFunction(() => panel.shadowRoot.querySelectorAll("tbody tr").length === 2);
+      assert.equal(await page.evaluate(() => panel.model.selected.size), 2);
+      await page.evaluate(() => fixture.emit(fixture.reading(4301, 0)));
+      assert.equal(await page.evaluate(() => panel.model.selected.get(4301).points.length), 3);
+      assert.equal(await page.evaluate(() => fixture.calls), 1, "Filtering must not resubscribe");
+      for (const query of ["obýváku", "TE_obyvak", "4101", "Venkovní alarm"]) {
+        await page.getByRole("searchbox").fill(query);
+        await page.waitForFunction(expected => panel.shadowRoot.querySelectorAll("tbody tr").length === 1 &&
+          panel.shadowRoot.querySelector("tbody").textContent.includes(expected), query === "Venkovní alarm" ? "TE_venkovni" : "TE_obyvak");
+      }
+      await page.getByRole("searchbox").fill("");
+      await page.getByRole("combobox", { name: "Typ proměnné", exact: true }).selectOption("Int");
+      await page.waitForFunction(() => panel.shadowRoot.querySelectorAll("tbody tr").length === 0);
+      await page.getByRole("combobox", { name: "Typ proměnné", exact: true }).selectOption("all");
+      await page.waitForFunction(() => panel.shadowRoot.querySelectorAll("tbody tr").length === 2);
+      await page.getByRole("checkbox", { name: "Vybráno: Teplota obýváku", exact: true }).focus();
+      const before = await page.evaluate(() => {
+        window.metadataRow = panel._rows.get(4101).row;
+        return JSON.stringify([...panel.model.selected]);
+      });
+      await page.evaluate(() => fixture.metadata([{ wid: 4101, configured: true, entities: [
+        { entity_id: "sensor.renamed", name: "Teplota pokoje", custom_name: "Teplota pokoje", disabled: true },
+      ] }]));
+      await page.waitForFunction(() => panel._charts.get(4101).name.textContent === "Teplota pokoje");
+      assert.equal(await page.evaluate(() => JSON.stringify([...panel.model.selected])), before);
+      assert.equal(await page.evaluate(() => panel._rows.get(4101).row === metadataRow), true);
+      assert.equal(await page.getByRole("checkbox", { name: "Vybráno: Teplota pokoje", exact: true })
+        .evaluate(e => e.getRootNode().activeElement === e), true);
+      assert.ok((await page.evaluate(() => panel._charts.get(4101).identity.textContent)).includes("TE_obyvak"));
+      assert.ok((await page.evaluate(() => panel._charts.get(4101).entities.textContent)).includes("Zakázaná"));
+      await page.getByRole("slider", { name: "Vzorek: Teplota pokoje", exact: true }).focus();
+      await page.getByRole("slider", { name: "Vzorek: Teplota pokoje", exact: true }).press("Home");
+      assert.equal(await page.getByRole("slider", { name: "Vzorek: Teplota pokoje", exact: true })
+        .getAttribute("aria-valuetext").then(v => v.includes("22")), true);
+      await page.evaluate(() => fixture.metadata([{ wid: 4101, configured: true, entities: [] }]));
+      await page.waitForFunction(() => panel._charts.get(4101).name.textContent === "TE_obyvak" && !panel._rows.has(4101));
+      assert.equal(await page.evaluate(() => JSON.stringify([...panel.model.selected])), before);
+      await page.evaluate(() => fixture.metadata([{ wid: 4101, configured: true, entities: [
+        { entity_id: "sensor.living_room", name: "Teplota obýváku po přejmenování s delším vlastním názvem", custom_name: "Teplota obýváku po přejmenování s delším vlastním názvem", disabled: false },
+      ] }]));
+      await page.waitForFunction(() => panel._rows.has(4101));
+      for (const dark of [false, true]) {
+        await theme(page, dark);
+        for (const width of [320, 390, 1024]) {
+          await page.setViewportSize({ width, height: 1000 });
+          await page.waitForTimeout(180);
+          assert.deepEqual(await page.evaluate(() => [...panel.shadowRoot.querySelectorAll(".section,.tools,.meta")]
+            .filter(e => e.scrollWidth > e.clientWidth + 1).map(e => e.className)), []);
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+          if (process.env.AMIT_SCREENSHOT_DIR && width !== 320) await page.screenshot({
+            path: path.join(process.env.AMIT_SCREENSHOT_DIR, `amit-entity-names-${dark ? "dark" : "light"}-${width}.png`), fullPage: true,
+          });
+        }
+      }
+      await page.evaluate(() => { panel.hass = { ...panel._hass, language: "en" }; });
+      await page.getByRole("combobox", { name: "Home Assistant entities", exact: true }).waitFor();
+      await page.waitForFunction(() => panel._rows.get(4102).entities.textContent.includes("Disabled"));
+      await page.getByRole("combobox", { name: "Home Assistant entities", exact: true }).selectOption("all");
+      await page.evaluate(() => fixture.metadata([{ wid: 0, configured: true, entities: [
+        { entity_id: 'sensor.<img src="bad" onerror="window.injected=true">', name: '<img src="bad" onerror="window.injected=true">', custom_name: null, disabled: false },
+      ] }]));
+      await page.waitForFunction(() => panel._rows.has(0));
+      assert.equal(await page.locator("amit-monitor-panel img").count(), 0);
+      assert.equal(await page.evaluate(() => window.injected), undefined);
+      await page.getByRole("button", { name: "Pause", exact: true }).click();
+      await page.getByRole("button", { name: "Resume", exact: true }).click();
+      await page.waitForFunction(() => panel.model.catalog.get(4101).entities.length === 1 && fixture.active.size === 1);
+      await page.getByRole("combobox", { name: "PLC", exact: true }).selectOption("second");
+      await page.waitForFunction(() => panel.model.runtime === "runtime-second" && panel._rows.get(4101)?.name.textContent === "TE_obyvak");
+      assert.equal(await page.evaluate(() => panel.model.catalog.get(4101).entities.length), 0);
+      assert.equal(await page.evaluate(() => panel.model.selected.size), 0);
+      assert.equal(await page.evaluate(() => panel._rows.get(4101).name.textContent), "TE_obyvak");
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("HA names, original PLC identity, disabled and multiple entities, combined filters, rename/removal without history loss, safe text, mobile themes, reconnect and PLC isolation");
       await page.close();
     }
     console.log(JSON.stringify({ passed: results }, null, 2));

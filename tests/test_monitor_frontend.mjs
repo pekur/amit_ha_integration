@@ -124,6 +124,50 @@ test("Czech and English translations contain the same nonempty keys", () => {
   for (const messages of Object.values(TRANSLATIONS)) assert.ok(Object.values(messages).every(v => typeof v === "string" && v.length));
 });
 
+test("entity updates change labels without touching samples, gaps, sequence, or PLC definitions", () => {
+  const model = new MonitorHistory(); model.snapshot(snapshot()); model.select(1, true);
+  send(model, reading(1));
+  const series = model.selected.get(1), points = series.points, latest = model.latest.get(1);
+  const entities = [{ entity_id: "sensor.renamed", name: "Living room", custom_name: "Living room", disabled: true }];
+  model.entityMetadata({ runtime_id: "first", sequence: 999, variables: [
+    { wid: 1, configured: true, entities, name: "Wrong PLC name", revision: 99, readable: false },
+  ] });
+  assert.deepEqual(model.catalog.get(1), { ...variable(), configured: true, entities });
+  assert.equal(model.selected.get(1), series); assert.equal(series.points, points);
+  assert.equal(model.latest.get(1), latest); assert.equal(model.sequence, 1);
+  assert.equal(series.gap, false); assert.equal(series.floor, 1); assert.equal(model.count, 1);
+  send(model, reading(2));
+  assert.deepEqual(points.map(p => p.breakBefore), [false, false]);
+  model.breakSeries();
+  model.entityMetadata({ runtime_id: "first", variables: [{ wid: 1, configured: false, entities: [] }] });
+  assert.equal(series.gap, true); assert.equal(model.count, 2);
+  assert.deepEqual(model.catalog.get(1).entities, []);
+});
+
+test("metadata from another PLC runtime and malformed or unknown patches are ignored", () => {
+  const model = new MonitorHistory(); model.snapshot(snapshot());
+  const before = model.catalog.get(1);
+  for (const event of [
+    { runtime_id: "other", variables: [{ wid: 1, configured: true, entities: [] }] },
+    { runtime_id: "first", variables: null },
+    { runtime_id: "first", variables: [null, { wid: 1 }, { wid: 1, configured: true, entities: null },
+      { wid: 99, configured: true, entities: [] }] },
+  ]) model.entityMetadata(event);
+  assert.equal(model.catalog.get(1), before); assert.equal(model.catalog.size, 1);
+});
+
+test("snapshot metadata supports multiple entities, disabled entries, and older API snapshots", () => {
+  const model = new MonitorHistory();
+  const entities = [{ entity_id: "sensor.one", name: "First", custom_name: "First", disabled: false },
+    { entity_id: "number.two", name: "Second", custom_name: null, disabled: true }];
+  model.snapshot(snapshot([{ ...variable(), configured: true, entities }]));
+  assert.deepEqual(model.catalog.get(1).entities, entities);
+  entities[0].name = "Caller change";
+  assert.equal(model.catalog.get(1).entities[0].name, "First");
+  model.snapshot(snapshot());
+  assert.deepEqual(model.catalog.get(1), { ...variable(), configured: false, entities: [] });
+});
+
 test("axis precision distinguishes small, negative, and narrowly spaced ticks", () => {
   const ranges = [[.048505, .049995], [-.049995, -.048505], [-.0001, .0001],
     [1e6, 1e6 + 1], [1e-38, 1.1e-38], [-3.4e38, -3e38], [0, 1]];

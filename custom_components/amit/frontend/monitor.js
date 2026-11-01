@@ -18,6 +18,9 @@ export const TRANSLATIONS = {
     memory: "History is cleared when you leave the monitor or change PLC. Memory only; up to 2,000 samples per variable and 50,000 in total. Oldest samples are removed at the limit.",
     limited: "The oldest samples have been removed to keep the memory limit.",
     snapshot: "Latest values are shown immediately when available; history starts with new readings.",
+    haFilter: "Home Assistant entities", allVariables: "All variables", withEntity: "With HA entity",
+    disabledEntity: "Disabled", configuredOnly: "Selected in HA configuration · no entity",
+    plcVariable: "PLC variable",
   },
   cs: {
     title: "AMiT Monitor", plc: "PLC", variables: "Proměnné", trends: "Sledování v čase",
@@ -37,8 +40,21 @@ export const TRANSLATIONS = {
     memory: "Historie zanikne při opuštění monitoru nebo změně PLC. Pouze v paměti; nejvýše 2 000 vzorků na proměnnou a 50 000 celkem. Při dosažení limitu se odstraní nejstarší vzorky.",
     limited: "Nejstarší vzorky byly odstraněny kvůli limitu paměti.",
     snapshot: "Poslední hodnoty se zobrazí, pokud jsou dostupné; historie začíná novými odečty.",
+    haFilter: "Entity Home Assistantu", allVariables: "Všechny proměnné", withEntity: "S HA entitou",
+    disabledEntity: "Zakázaná", configuredOnly: "Vybraná v konfiguraci HA · bez entity",
+    plcVariable: "Proměnná PLC",
   },
 };
+
+function entityFields(variable) {
+  return {
+    configured: variable.configured === true,
+    entities: (Array.isArray(variable.entities) ? variable.entities : [])
+      .filter(e => e && typeof e.entity_id === "string" && e.entity_id && typeof e.name === "string" && e.name)
+      .map(e => ({ entity_id: e.entity_id, name: e.name,
+        custom_name: typeof e.custom_name === "string" ? e.custom_name : null, disabled: e.disabled === true })),
+  };
+}
 
 export class MonitorHistory {
   constructor(perVariable = 2000, total = 50000) {
@@ -63,7 +79,7 @@ export class MonitorHistory {
     }
     this.runtime = event.runtime_id;
     this.interval = Number.isFinite(event.scan_interval) ? event.scan_interval : 30;
-    const catalog = new Map(event.variables.map(v => [v.wid, v]));
+    const catalog = new Map(event.variables.map(v => [v.wid, { ...v, ...entityFields(v) }]));
     for (const [wid, series] of this.selected) {
       const variable = catalog.get(wid);
       if (!variable?.readable) {
@@ -83,6 +99,15 @@ export class MonitorHistory {
     // table, but never backfill a graph or become new measurements.
     this.breakSeries();
     for (const series of this.selected.values()) series.floor = this.sequence;
+  }
+
+  entityMetadata(event) {
+    if (event.runtime_id !== this.runtime || !Array.isArray(event.variables)) return;
+    for (const patch of event.variables) {
+      if (!patch || typeof patch.configured !== "boolean" || !Array.isArray(patch.entities)) continue;
+      const variable = this.catalog.get(patch.wid);
+      if (variable) this.catalog.set(patch.wid, { ...variable, ...entityFields(patch) });
+    }
   }
 
   _latest(sample) {
@@ -158,6 +183,7 @@ button,input,select{font:inherit;color:inherit}button,select,input[type=search]{
 .columns{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(0,1fr);align-items:start;gap:18px;padding:20px}.section{min-width:0;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#dce4eb);border-radius:12px;overflow:hidden}.section-head{padding:16px;justify-content:space-between}.tools,.actions{padding:0 16px 14px}.tools{display:flex;flex-wrap:wrap;gap:8px}.tools input{width:100%}.pager{padding:12px 16px;justify-content:space-between;border-top:1px solid var(--divider-color,#dce4eb)}.pager[hidden]{display:none}.pager button{padding:5px 9px}
 table{width:100%;border-collapse:collapse}th{text-align:left;font-size:12px;font-weight:400;color:var(--secondary-text-color,#526775);background:var(--primary-background-color,#f5f7fa);padding:9px 10px}td{border-top:1px solid var(--divider-color,#dce4eb);padding:12px 10px;vertical-align:middle}td:first-child,th:first-child{width:42px;padding:0}td:first-child label{display:flex;align-items:center;justify-content:center;min-height:44px;min-width:42px}td:last-child,th:last-child{text-align:right}.name{display:block;overflow-wrap:anywhere;font-weight:500}.value{white-space:nowrap}input[type=checkbox]{width:18px;height:18px;accent-color:var(--primary-color,#007eaa)}tr.selected{background:color-mix(in srgb,var(--primary-color,#007eaa) 9%,var(--card-background-color,#fff))}.error{color:var(--error-color,#a12836)}.changed .value{animation:changed 1s ease-out}@keyframes changed{from{background:color-mix(in srgb,var(--primary-color,#007eaa) 25%,transparent)}to{background:transparent}}
 .foot{padding:12px 16px;border-top:1px solid var(--divider-color,#dce4eb);color:var(--secondary-text-color,#526775);font-size:12px}.plots{padding:0 16px 12px}.chart{border-top:1px solid var(--divider-color,#dce4eb);padding-top:14px;margin-bottom:16px}.chart-head{justify-content:space-between}.chart-name{display:flex;align-items:center;gap:7px;min-width:0;overflow-wrap:anywhere}.swatch{width:18px;height:3px;background:var(--series);flex-shrink:0}.chart svg{display:block;width:100%;height:190px;touch-action:pan-y}.chart svg text{fill:var(--secondary-text-color,#526775);font:12px system-ui,sans-serif}.chart-detail{min-height:36px;font-size:12px;color:var(--secondary-text-color,#526775);overflow-wrap:anywhere}.sample-control{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--secondary-text-color,#526775)}.sample-control input{min-width:0;flex:1;accent-color:var(--primary-color,#007eaa)}.empty{padding:24px 16px;color:var(--secondary-text-color,#526775);text-align:center}.notice{padding:0 20px 20px;font-size:12px;color:var(--secondary-text-color,#526775)}.status{display:flex;align-items:center;gap:6px}.status-dot{width:8px;height:8px;border-radius:50%;background:var(--primary-color,#007eaa)}.status[data-offline=true] .status-dot{background:var(--disabled-text-color,#888)}.limit{padding:0 16px 12px;font-size:12px;color:var(--secondary-text-color,#526775)}[hidden]{display:none!important}
+.identity,.entity-info{display:block;overflow-wrap:anywhere}.chart-name{flex:1}
 :host([compact]) .columns{grid-template-columns:minmax(0,1fr)}
 @media(max-width:600px){header{padding:14px}.columns{padding:14px;gap:14px;grid-template-columns:minmax(0,1fr)}.notice{padding:0 14px 18px}button{min-height:44px}select,input[type=search]{font-size:16px}h1{font-size:20px}}
 @media(prefers-reduced-motion:reduce){.changed .value{animation:none}}
@@ -180,6 +206,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._lang = "en";
     this._query = "";
     this._type = "all";
+    this._haFilter = "all";
     this._tablePage = 0;
     this._chartPage = 0;
     this._rows = new Map();
@@ -260,6 +287,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._paused = false;
     this._query = "";
     this._type = "all";
+    this._haFilter = "all";
     this._tablePage = this._chartPage = 0;
     this._subscriptionFailed = this._unavailable = false;
     this._error = null;
@@ -271,6 +299,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._optionKey = null;
     if (this._search) this._search.value = "";
     if (this._filter) this._filter.value = "all";
+    if (this._haSelect) this._haSelect.value = "all";
     if (this.isConnected) this._scheduleRender();
   }
 
@@ -345,6 +374,8 @@ export class AMiTMonitorPanel extends HTMLElement {
       if (token !== this._token || !this.isConnected || this._paused || document.hidden) return;
       if (event.kind === "snapshot" || event.kind === "catalog") {
         this.model.snapshot(event);
+      } else if (event.kind === "entity_metadata") {
+        this.model.entityMetadata(event);
       } else if (event.kind === "sample") {
         const previous = this.model.latest.get(event.sample.wid);
         if (this.model.sample(event) && previous?.value !== event.sample.value) {
@@ -385,7 +416,7 @@ export class AMiTMonitorPanel extends HTMLElement {
       <button type="button" class="refresh" data-label="refresh"><ha-icon icon="mdi:refresh"></ha-icon></button>
       <span class="last-read muted small"></span></div></header>
       <div class="columns"><section class="section"><div class="section-head"><h2 data-text="variables"></h2><span class="count muted small"></span></div>
-      <div class="tools"><input type="search" data-label="search"><select class="filter" data-label="type"></select></div>
+      <div class="tools"><input type="search" data-label="search"><select class="filter" data-label="type"></select><select class="ha-filter" data-label="haFilter"></select></div>
       <table><thead><tr><th><span aria-hidden="true">✓</span></th><th data-text="variable" scope="col"></th><th data-text="value" scope="col"></th></tr></thead><tbody></tbody></table>
       <div class="table-empty empty" data-text="empty" hidden></div><div class="table-pager pager"></div><div class="foot" data-text="raw"></div></section>
       <section class="section"><div class="section-head"><h2 data-text="trends"></h2><span class="selection muted small" aria-live="polite"></span></div>
@@ -395,6 +426,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     const find = selector => this.shadowRoot.querySelector(selector);
     this._search = find("input[type=search]");
     this._filter = find(".filter");
+    this._haSelect = find(".ha-filter");
     this._plcs = find(".plcs");
     this._tbody = find("tbody");
     this._plots = find(".plots");
@@ -402,6 +434,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     find(".refresh").onclick = () => { this._subscriptionFailed = false; this._loadEntries(); };
     this._search.oninput = () => { this._query = this._search.value.toLocaleLowerCase(); this._tablePage = 0; this._scheduleRender(); };
     this._filter.onchange = () => { this._type = this._filter.value; this._tablePage = 0; this._scheduleRender(); };
+    this._haSelect.onchange = () => { this._haFilter = this._haSelect.value; this._tablePage = 0; this._scheduleRender(); };
     this._plcs.onchange = () => {
       this._stopSubscription();
       this._entryId = this._plcs.value || null;
@@ -432,6 +465,12 @@ export class AMiTMonitorPanel extends HTMLElement {
       return option;
     }));
     this._filter.value = this._type;
+    this._haSelect.replaceChildren(...["all", "ha"].map(value => {
+      const option = node("option", "", this._t(value === "all" ? "allVariables" : "withEntity"));
+      option.value = value;
+      return option;
+    }));
+    this._haSelect.value = this._haFilter;
     this._scheduleRender();
   }
 
@@ -521,10 +560,23 @@ export class AMiTMonitorPanel extends HTMLElement {
     label.textContent = `${this._t("page")} ${page + 1} / ${pages}`;
   }
 
+  _variableName(variable) {
+    return [...new Set(variable.entities.map(e => e.name))].join(" · ") || variable.name;
+  }
+
+  _variableIdentity(variable) {
+    return `${variable.entities.length ? this._t("plcVariable") + ": " + variable.name + " · " : ""}WID ${variable.wid} · ${variable.type}`;
+  }
+
+  _entityInfo(variable) {
+    return variable.entities.map(e => `${variable.entities.length > 1 ? e.name + " · " : ""}${e.entity_id}${e.disabled ? " · " + this._t("disabledEntity") : ""}`)
+      .join("; ") || (variable.configured ? this._t("configuredOnly") : "");
+  }
+
   _renderRows() {
     const variables = [...this.model.catalog.values()].filter(v =>
-      (v.name.toLocaleLowerCase().includes(this._query) || String(v.wid).includes(this._query)) &&
-      (this._type === "all" || v.type === this._type));
+      ([v.name, String(v.wid), ...v.entities.map(e => e.name)].some(name => name.toLocaleLowerCase().includes(this._query))) &&
+      (this._type === "all" || v.type === this._type) && (this._haFilter === "all" || v.entities.length > 0));
     this._tablePage = Math.min(this._tablePage, Math.max(0, Math.ceil(variables.length / 50) - 1));
     const visible = variables.slice(this._tablePage * 50, (this._tablePage + 1) * 50);
     const keep = new Set(visible.map(v => v.wid));
@@ -537,21 +589,23 @@ export class AMiTMonitorPanel extends HTMLElement {
         checkbox.type = "checkbox";
         checkbox.onchange = () => { this.model.select(variable.wid, checkbox.checked); this._scheduleRender(); };
         label.append(checkbox); checkCell.append(label);
-        const nameCell = node("td"), name = node("span", "name"), metadata = node("span", "small muted");
-        nameCell.append(name, metadata);
+        const nameCell = node("td"), name = node("span", "name"), metadata = node("span", "identity small muted"), entities = node("div", "entity-info small muted");
+        nameCell.append(name, metadata, entities);
         const valueCell = node("td"), value = node("span", "number value"), reading = node("div", "small"), last = node("div", "small muted");
         valueCell.append(value, reading, last); row.append(checkCell, nameCell, valueCell);
-        entry = { row, checkbox, name, metadata, value, reading, last };
+        entry = { row, checkbox, name, metadata, entities, value, reading, last };
         this._rows.set(variable.wid, entry);
       }
       if (entry.row !== nextRow) this._tbody.insertBefore(entry.row, nextRow);
       nextRow = entry.row.nextSibling;
       entry.checkbox.checked = this.model.selected.has(variable.wid);
       entry.checkbox.disabled = !variable.readable;
-      entry.checkbox.setAttribute("aria-label", `${this._t("selected")}: ${variable.name}`);
+      entry.checkbox.setAttribute("aria-label", `${this._t("selected")}: ${this._variableName(variable)}`);
       entry.row.classList.toggle("selected", entry.checkbox.checked);
-      entry.name.textContent = variable.name;
-      entry.metadata.textContent = `${variable.wid} · ${variable.type}`;
+      entry.name.textContent = this._variableName(variable);
+      entry.metadata.textContent = this._variableIdentity(variable);
+      entry.entities.textContent = this._entityInfo(variable);
+      entry.entities.hidden = !entry.entities.textContent;
       const sample = this.model.latest.get(variable.wid);
       const status = !variable.readable ? "unsupported" : sample?.status || "waiting";
       entry.value.textContent = status === "ok" ? `${this._format(sample.value)} ${variable.unit || ""}` : "—";
@@ -579,11 +633,12 @@ export class AMiTMonitorPanel extends HTMLElement {
       if (!chart) {
         const element = node("div", "chart"), header = node("div", "chart-head"), label = node("div", "chart-name");
         const name = node("span"), value = node("span", "number"); label.append(node("span", "swatch"), name); header.append(label, value);
+        const identity = node("div", "identity small muted"), entities = node("div", "entity-info small muted");
         const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("role", "img");
         const detail = node("div", "chart-detail number"), sampleControl = node("label", "sample-control"), sampleLabel = node("span"), range = node("input");
         range.type = "range"; range.min = "0"; range.step = "1"; sampleControl.append(sampleLabel, range);
-        element.append(header, svg, detail, sampleControl);
-        chart = { element, name, value, svg, detail, range, sampleLabel, hover: null };
+        element.append(header, identity, entities, svg, detail, sampleControl);
+        chart = { element, name, value, identity, entities, svg, detail, range, sampleLabel, hover: null };
         const selectPoint = event => {
           const points = this.model.selected.get(wid)?.points || [];
           if (!points.length || !chart.xToTime) return;
@@ -613,12 +668,16 @@ export class AMiTMonitorPanel extends HTMLElement {
     const palette = ["var(--primary-color,#007eaa)", "var(--warning-color,#b26a00)", "var(--purple-color,#9064b9)",
       "var(--success-color,#388e3c)", "var(--error-color,#d34454)", "var(--cyan-color,#008b8b)"];
     chart.element.style.setProperty("--series", palette[Math.abs(wid) % palette.length]);
-    chart.name.textContent = variable.name;
+    const name = this._variableName(variable);
+    chart.name.textContent = name;
+    chart.identity.textContent = this._variableIdentity(variable);
+    chart.entities.textContent = this._entityInfo(variable);
+    chart.entities.hidden = !chart.entities.textContent;
     const latest = this.model.latest.get(wid);
     chart.value.textContent = `${this._format(latest?.status === "ok" ? latest.value : null)} ${variable.unit || ""}`;
-    chart.svg.setAttribute("aria-label", `${variable.name}: ${points.length} ${this._t("samples")}`);
+    chart.svg.setAttribute("aria-label", `${name}: ${points.length} ${this._t("samples")}`);
     chart.sampleLabel.textContent = this._t("sample");
-    chart.range.setAttribute("aria-label", `${this._t("sample")}: ${variable.name}`);
+    chart.range.setAttribute("aria-label", `${this._t("sample")}: ${name}`);
     chart.range.disabled = !points.length;
     chart.range.max = String(Math.max(0, points.length - 1));
     const width = Math.max(200, chart.svg.clientWidth), height = 190, left = 64, right = width - 12, top = 22, bottom = 148;

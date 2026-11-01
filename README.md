@@ -97,11 +97,13 @@ Read-only variables are excluded from the writable selection. Older selections a
 Open **AMiT Monitor** in the Home Assistant sidebar with an administrator account. The panel appears when at least one AMiT entry is loaded and the Home Assistant frontend is enabled. It supports Czech and English, follows the active theme, and adapts to mobile screens.
 
 1. Choose the PLC in the header.
-2. Search by variable name or WID, or filter by type.
+2. Search by PLC variable name, Home Assistant entity name, or WID. Combine the type filter with **All variables / With HA entity**.
 3. Select variables to start recording new readings in their graphs.
 4. Use the graph pointer or sample slider to inspect an actual reading and its time. The slider also supports keyboard navigation.
 
 The table includes all variables discovered by the selected target profile, including variables without Home Assistant entities. It reads Int16, Int32, and Float values. Arrays, time arrays, and structures remain listed as unsupported for reading. The table shows 50 rows per page; the graph area shows four selected variables per page. Other selected variables continue recording while their graphs are on another page.
+
+For variables with HA entities, the table and graphs show their entity names, including custom names. The original PLC name, WID, and entity IDs remain visible below. Disabled entities are marked and included in **With HA entity**; a variable selected in configuration without a registry entity is marked separately. Renaming an entity updates its labels without interrupting the graph. Filtering the table keeps the selection and continues recording hidden variables.
 
 Values are raw decoded PLC readings. Units come from the target profile where available. Entity-specific filtering is not applied: for example, a temperature value that an existing sensor treats as unavailable can still appear in the monitor. Failed or invalid readings create gaps in graphs instead of zeros. Each reading carries its own timestamp; an old value is not presented as a new measurement.
 
