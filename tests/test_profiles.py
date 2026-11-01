@@ -204,6 +204,18 @@ class AddVariablesPreviewTests(HAStubTestCase):
         self.assertEqual(self.data, original)
         self.assertEqual(set(result["config_patch"]), {"variables", "writable_variables"})
 
+    async def test_previously_unsupported_variable_is_included_when_it_becomes_readable(self):
+        previous = self.protocol.Variable("Current", 1, self.protocol.VarType.ARRAY)
+        original = deepcopy(self.data)
+        result = self.flow_module.preview_variable_addition(
+            self.data, self.variables, [2], [previous], set())
+        self.assertEqual(result["added_wids"], [2])
+        self.assertEqual(result["newly_monitored_wids"], [1, 2])
+        self.assertEqual(result["resulting_wids"], [1, 2])
+        self.assertEqual(result["config_patch"], {"variables": ["1", "2"], "writable_variables": []})
+        self.assertEqual(self.data, original)
+        self.assertFalse(previous.is_readable())
+
     async def test_already_configured_is_idempotent_and_preserves_stored_order_and_types(self):
         self.data["variables"] = [2, "1"]
         self.data["writable_variables"] = [1]

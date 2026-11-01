@@ -432,6 +432,32 @@ class WebSocketTests(HAStubTestCase):
         self.client.write_variable.assert_not_awaited()
         self.assertEqual(self.monitor._listeners, {})
 
+    async def test_addition_preview_includes_existing_variable_that_becomes_readable(self):
+        self.addition_setup()
+        previous = self.protocol.Variable("PreviouslyArray", 0, self.protocol.VarType.ARRAY)
+        current = self.protocol.Variable("NowNumeric", 0, self.protocol.VarType.FLOAT)
+        self.entry.data["writable_variables"] = []
+        before = json.dumps(self.entry.data, sort_keys=True)
+        self.registry_entries.clear()
+        self.hass.data["amit"]["first"].update(
+            variables=[previous], all_variables=[current, self.extra], writable_wids=set())
+        self.monitor.update_catalog([current, self.extra])
+
+        result = self.addition_preview()
+
+        self.assertEqual(result["added_wids"], [1])
+        self.assertEqual(result["newly_monitored_wids"], [0, 1])
+        self.assertEqual([v["wid"] for v in result["variables"]], [0, 1])
+        self.assertEqual(result["variables"][0]["name"], "NowNumeric")
+        self.assertEqual(result["config_patch"], {"variables": ["0", "1"], "writable_variables": []})
+        self.assertTrue(result["requires_reload"])
+        self.assertEqual(json.dumps(self.entry.data, sort_keys=True), before)
+        self.assertFalse(previous.is_readable())
+        self.hass.config_entries.async_update_entry.assert_not_called()
+        self.hass.config_entries.async_reload.assert_not_awaited()
+        self.client.read_variable.assert_not_awaited()
+        self.client.write_variable.assert_not_awaited()
+
     async def test_addition_preview_preserves_all_mode_and_shows_full_implicit_effect(self):
         self.addition_setup()
         self.entry.data["variables"] = []

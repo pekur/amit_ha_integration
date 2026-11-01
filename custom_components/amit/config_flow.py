@@ -81,7 +81,8 @@ def preview_variable_addition(
         "requested_wids": sorted(requested_wids),
         "added_wids": sorted(added),
         "already_configured_wids": sorted(requested_wids & configured),
-        "newly_monitored_wids": sorted((result & readable.keys()) - {v.wid for v in monitored}),
+        "newly_monitored_wids": sorted(
+            (result & readable.keys()) - {v.wid for v in monitored if v.is_readable()}),
         "resulting_wids": sorted(result),
         "removed_write_wids": sorted(stored_writable - retained_writable),
         "config_patch": {
