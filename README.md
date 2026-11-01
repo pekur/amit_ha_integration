@@ -111,17 +111,29 @@ For variables with HA entities, the table and graphs show their entity names, in
 
 Values are raw decoded PLC readings. Units come from the target profile where available. Entity-specific filtering is not applied: for example, a temperature value that an existing sensor treats as unavailable can still appear in the monitor. Failed or invalid readings create gaps in graphs instead of zeros. Each reading carries its own timestamp; an old value is not presented as a new measurement.
 
+### Add selected variables as Home Assistant entities
+
+1. Select readable variables in the table, then click **Add selected as HA entities** in the graph section. The preview includes the whole selection, including variables hidden by filters or on other table and graph pages.
+2. Check the PLC, variable names and WIDs, existing entities, and configuration changes. If the device uses **all readable variables**, that setting stays enabled: reloading can also add the other variables listed in the preview.
+3. Click **Save and load entities** to save the selection in Home Assistant and reload that AMiT entry. **Cancel** closes the preview without saving. A selection already configured with no changes needed has no save action.
+
+The saved selection includes the existing variables and preserves other device settings and entity customizations. New variables are added for reading. Existing valid write permissions are retained; obsolete permissions shown in the preview are removed. This action does not write control values to the PLC or change its program. Existing disabled entities stay disabled.
+
+Saving and loading are reported separately. **Selection saved** means that Home Assistant has accepted the configuration; it does not yet mean that the device has loaded successfully. If Home Assistant is waiting to retry, the monitor shows that state. A loading failure leaves the saved selection in place; check the integration in **Settings → Devices & services**. When a connection interruption prevents verification of the confirmation, the monitor reports an unknown result: refresh the PLC list and prepare a new preview before trying again.
+
+Changing the PLC closes the preview. Changes to the selection, variable definitions, entity information, or configuration can require a new preview. Previews expire after five minutes. Reloading clears the old temporary monitor history; samples collected in the new session are kept when a delayed loading result arrives. Permanently added entities use Home Assistant's normal history settings, including Recorder exclusions.
+
 ### Temporary history
 
 - History starts with the next new reading after selection. Initial snapshots update the table without adding old readings to a graph.
-- History stays only in the open panel's memory. The monitor does not create entities or save readings to Recorder, files, or browser storage. Existing entities retain their normal Home Assistant history behavior.
+- History stays only in the open panel's memory. Selecting variables for graphs does not create entities or save these graph samples to Recorder, files, or browser storage. Entities explicitly added with **Add selected as HA entities** retain their normal Home Assistant history behavior.
 - The limit is **2,000 samples per variable and 50,000 samples in total**. The oldest samples are removed when a limit is reached.
 - Deselecting a variable clears its series. **Clear history** removes recorded samples while keeping the current selection and latest table values.
 - Leaving the monitor, reloading the page, changing PLC, or destroying the panel clears its history and selection.
 - **Pause** and a hidden browser tab stop the panel's live subscription. Existing integration polling continues. Returning to the monitor keeps the available in-memory history and starts a new graph segment. Home Assistant can destroy a suspended panel; a recreated panel starts a new session.
 - A connection interruption keeps existing graph samples. Reconnection updates the table from a snapshot and resumes recording new samples without filling the missed interval.
 
-The panel is read-only. It shares ordinary polling results and uses one additional reader per PLC for other readable variables while viewers are connected. Extra reads run sequentially, with at least 0.2 seconds between requests and a delay after transport errors. Large catalogs and slow PLC replies can make a full scan longer than the configured interval. Check each value's reading time and age. Opening several panels does not multiply the extra PLC reads.
+PLC values in the panel are read-only. It shares ordinary polling results and uses one additional reader per PLC for other readable variables while viewers are connected. Extra reads run sequentially, with at least 0.2 seconds between requests and a delay after transport errors. Large catalogs and slow PLC replies can make a full scan longer than the configured interval. Check each value's reading time and age. Opening several panels does not multiply the extra PLC reads. The monitor currently has no separate reading-interval control.
 
 ### Monitor troubleshooting
 
