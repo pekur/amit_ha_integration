@@ -111,6 +111,19 @@ For variables with HA entities, the table and graphs show their entity names, in
 
 Values are raw decoded PLC readings. Units come from the target profile where available. Entity-specific filtering is not applied: for example, a temperature value that an existing sensor treats as unavailable can still appear in the monitor. Failed or invalid readings create gaps in graphs instead of zeros. Each reading carries its own timestamp; an old value is not presented as a new measurement.
 
+### Reading interval
+
+The monitor starts with the scan interval configured for the device in this integration. Enter a **Reading interval (s)** from **1 to 120 seconds**, including decimal values, choose **Apply interval to**, and click **Apply** (or press Enter):
+
+- **All readable variables** applies the interval to the whole readable catalog.
+- **Selected variables only** applies it to variables checked for graphs, including those hidden by filters or on other pages. Changing the selection updates the request. Other variables use the device interval; an empty selection leaves all variables at that interval.
+
+**Use device interval** cancels the custom request. Applying or resetting an interval keeps recorded history and starts a new graph segment. The setting stays only in the current panel's memory. Closing the panel, reloading the page, or changing PLC clears it; a new session starts with the device interval. Pausing or hiding the panel temporarily releases its request and restores it when monitoring resumes.
+
+This is a requested reading interval. Ordinary Home Assistant polling continues at the device interval, and its readings are shared with the monitor. Several active panels share one reader per PLC; for each variable, the shortest requested interval applies, including the device interval for panels using that setting. Values can therefore arrive more often than requested. Large catalogs and slow responses can delay readings. Check each value's reading time and age.
+
+If selected variables disappear or become unreadable while the panel is suspended or disconnected, it can refresh the catalog and retry the remaining selection once. History for unchanged variables in the same device session is kept. If recovery fails, the panel reports an interval error; retry with **Apply** or **Use device interval**.
+
 ### Add selected variables as Home Assistant entities
 
 1. Select readable variables in the table, then click **Add selected as HA entities** in the graph section. The preview includes the whole selection, including variables hidden by filters or on other table and graph pages.
@@ -133,7 +146,7 @@ Changing the PLC closes the preview. Changes to the selection, variable definiti
 - **Pause** and a hidden browser tab stop the panel's live subscription. Existing integration polling continues. Returning to the monitor keeps the available in-memory history and starts a new graph segment. Home Assistant can destroy a suspended panel; a recreated panel starts a new session.
 - A connection interruption keeps existing graph samples. Reconnection updates the table from a snapshot and resumes recording new samples without filling the missed interval.
 
-PLC values in the panel are read-only. It shares ordinary polling results and uses one additional reader per PLC for other readable variables while viewers are connected. Extra reads run sequentially, with at least 0.2 seconds between requests and a delay after transport errors. Large catalogs and slow PLC replies can make a full scan longer than the configured interval. Check each value's reading time and age. Opening several panels does not multiply the extra PLC reads. The monitor currently has no separate reading-interval control.
+PLC values in the panel are read-only. It shares ordinary polling results and uses one additional reader per PLC for other readable variables and shorter requested intervals while viewers are connected. Extra reads run sequentially, with at least 0.2 seconds between requests and a delay after transport errors. Opening several panels shares this reader; their interval requests determine its reading schedule.
 
 ### Monitor troubleshooting
 
