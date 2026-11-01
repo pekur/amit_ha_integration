@@ -241,9 +241,6 @@ async def _async_setup_connected_entry(
     variables_by_wid = {v.wid: v for v in variables}
     variables_by_name = {v.name: v for v in variables}
     scan_interval = entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-    monitor = AMiTMonitor(
-        hass, client, all_variables, variables, scan_interval, target.entity_rules
-    )
     
     async def async_update_data() -> dict[int, Any]:
         """Fetch data from PLC."""
@@ -260,7 +257,8 @@ async def _async_setup_connected_entry(
                         except Exception as e:
                             _LOGGER.warning(f"Failed to read {variable.name}: {e}")
                             data[variable.wid] = None
-                            monitor.record(variable, failed=True)
+                            monitor.record(variable, failed=True,
+                                           connection_failed=isinstance(e, OSError))
                     await asyncio.sleep(0.02)  # Small delay between reads
             if data and all(value is None for value in data.values()):
                 raise UpdateFailed("Unable to read any selected PLC variable")
@@ -275,6 +273,10 @@ async def _async_setup_connected_entry(
         name=DOMAIN,
         update_method=async_update_data,
         update_interval=timedelta(seconds=scan_interval),
+    )
+    monitor = AMiTMonitor(
+        hass, client, all_variables, variables, scan_interval, target.entity_rules,
+        coordinator=coordinator,
     )
     
     # Fetch initial data

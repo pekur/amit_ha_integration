@@ -21,6 +21,19 @@ class CoordinatorStub:
     def __init__(self, hass, logger, *, name, update_method, update_interval):
         self.update_method = update_method
         self.data = None
+        self.listeners = {}
+
+    def async_add_listener(self, callback):
+        token = object()
+        self.listeners[token] = callback
+        return lambda: self.listeners.pop(token)
+
+    async def async_poll_if_listening(self):
+        # Model HA's scheduled polling: no listeners means no refresh.
+        if self.listeners:
+            self.data = await self.update_method()
+            for callback in list(self.listeners.values()):
+                callback()
 
     async def async_config_entry_first_refresh(self):
         # Model HA's documented UpdateFailed -> retryable setup behavior.
@@ -379,6 +392,74 @@ class SetupTests(HAStubTestCase):
         self.client.read_variable.assert_awaited_once_with(self.variable)
         self.assertEqual(events[0]["sample"]["value"], 123)
         self.assertIsNone(monitor._task)
+
+    async def test_monitor_keeps_polling_without_enabled_entities_and_releases_it(self):
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        runtime = self.hass.data["amit"][self.entry.entry_id]
+        monitor, coordinator = runtime["monitor"], runtime["coordinator"]
+        self.addAsyncCleanup(monitor.async_close)
+        self.client.read_variable.reset_mock()
+        await coordinator.async_poll_if_listening()
+        self.client.read_variable.assert_not_awaited()
+        events = []
+        first = monitor.subscribe(events.append)
+        second = monitor.subscribe(Mock())
+        self.assertEqual(len(coordinator.listeners), 1)
+        await coordinator.async_poll_if_listening()
+        self.client.read_variable.assert_awaited_once_with(self.variable)
+        self.assertEqual(events[-1]["sample"]["value"], 123)
+        first()
+        self.assertEqual(len(coordinator.listeners), 1)
+        second()
+        self.assertEqual(coordinator.listeners, {})
+        await coordinator.async_poll_if_listening()
+        self.assertEqual(self.client.read_variable.await_count, 1)
+        again = monitor.subscribe(Mock())
+        await coordinator.async_poll_if_listening()
+        self.assertEqual(self.client.read_variable.await_count, 2)
+        again()
+
+    async def test_monitor_and_entity_polling_listeners_are_independent(self):
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        runtime = self.hass.data["amit"][self.entry.entry_id]
+        monitor, coordinator = runtime["monitor"], runtime["coordinator"]
+        self.addAsyncCleanup(monitor.async_close)
+        remove_entity = coordinator.async_add_listener(Mock())
+        remove_monitor = monitor.subscribe(Mock())
+        self.assertEqual(len(coordinator.listeners), 2)
+        remove_entity()
+        await coordinator.async_poll_if_listening()
+        self.assertEqual(len(coordinator.listeners), 1)
+        remove_entity = coordinator.async_add_listener(Mock())
+        remove_monitor()
+        self.assertEqual(len(coordinator.listeners), 1)
+        self.client.read_variable.reset_mock()
+        await coordinator.async_poll_if_listening()
+        self.client.read_variable.assert_awaited_once_with(self.variable)
+        remove_monitor = monitor.subscribe(Mock())
+        await monitor.async_close()
+        self.assertEqual(len(coordinator.listeners), 1)
+        remove_monitor()  # Repeated WebSocket cleanup remains safe.
+        self.assertEqual(len(coordinator.listeners), 1)
+        remove_entity()
+
+    async def test_partial_read_error_does_not_set_global_monitor_backoff(self):
+        second = self.protocol.Variable("Good", 4002, self.protocol.VarType.INT16)
+        self.entry.data["variables"].append("4002")
+        self.client.load_variables.return_value.append(second)
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        runtime = self.hass.data["amit"][self.entry.entry_id]
+        self.addAsyncCleanup(runtime["monitor"].async_close)
+        runtime["monitor"].subscribe(Mock())
+        self.client.read_variable.side_effect = [RuntimeError("PLC rejected read"), 42]
+        with self.assertLogs(self.integration.__name__, level="WARNING"):
+            result = await runtime["coordinator"].update_method()
+        self.assertEqual(result, {4001: None, 4002: 42})
+        self.assertEqual(runtime["monitor"]._retry_after, 0)
+        self.client.read_variable.side_effect = [TimeoutError("offline"), 42]
+        with self.assertLogs(self.integration.__name__, level="WARNING"):
+            await runtime["coordinator"].update_method()
+        self.assertGreater(runtime["monitor"]._retry_after, 0)
 
     async def test_failed_unload_keeps_monitor_until_platforms_can_unload(self):
         await self.integration.async_setup_entry(self.hass, self.entry)

@@ -185,6 +185,40 @@ class MonitorTests(HAStubTestCase):
         await self.next_read(2)
         self.assertEqual(monitor.snapshot()["samples"][-1]["value"], 12.5)
 
+    async def test_rejected_variable_does_not_back_off_healthy_extra_reads(self):
+        another = self.protocol.Variable("Healthy", 4, self.protocol.VarType.INT32)
+        monitor = self.monitor([self.extra, another], [], interval=30)
+        self.client.read_variable.side_effect = [RuntimeError("PLC rejected read"), 42]
+        monitor.subscribe(Mock())
+        await self.next_read(2)
+        self.assertEqual([c.args[0].wid for c in self.client.read_variable.await_args_list], [2, 4])
+        samples = {s["wid"]: s for s in monitor.snapshot()["samples"]}
+        self.assertEqual(samples[2]["status"], "read_error")
+        self.assertEqual(samples[4]["value"], 42)
+        # Keep the failed variable's own retry deadline.
+        await asyncio.sleep(self.module.MIN_READ_DELAY + .02)
+        self.assertEqual(self.client.read_variable.await_count, 2)
+
+    async def test_repeated_partial_normal_failures_do_not_starve_extras(self):
+        monitor = self.monitor()
+        with monitor.normal_reads():
+            monitor.subscribe(Mock())
+            monitor.record(self.normal, failed=True)
+        for _ in range(4):
+            await asyncio.sleep(.03)
+            with monitor.normal_reads():
+                monitor.record(self.normal, failed=True)
+        await self.next_read()
+        self.client.read_variable.assert_awaited_once_with(self.extra)
+
+    async def test_normal_transport_failure_still_backs_off_extra_reads(self):
+        monitor = self.monitor()
+        with monitor.normal_reads():
+            monitor.subscribe(Mock())
+            monitor.record(self.normal, failed=True, connection_failed=True)
+        await asyncio.sleep(self.module.MIN_READ_DELAY + .03)
+        self.client.read_variable.assert_not_awaited()
+
     async def test_catalog_preserves_unchanged_samples_and_revises_changed_types(self):
         monitor = self.monitor([self.normal, self.array], [self.normal])
         events = []

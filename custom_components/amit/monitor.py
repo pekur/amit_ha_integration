@@ -16,6 +16,8 @@ from homeassistant.const import UnitOfTemperature
 from .protocol import AMiTClient, Variable
 
 if TYPE_CHECKING:
+    from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+
     from .targets import EntityRules
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,11 +33,14 @@ class AMiTMonitor:
 
     def __init__(self, hass, client: AMiTClient, variables: list[Variable],
                  monitored: list[Variable], scan_interval: float,
-                 rules: EntityRules | None = None) -> None:
+                 rules: EntityRules | None = None,
+                 *, coordinator: DataUpdateCoordinator | None = None) -> None:
         self._hass = hass
         self._client = client
         self._interval = max(MIN_READ_DELAY, scan_interval)
         self._rules = rules
+        self._coordinator = coordinator
+        self._unsub_coordinator: Callable[[], None] | None = None
         self._normal = {_signature(v) for v in monitored if v.is_readable()}
         self._listeners: dict[object, Callable[[dict], None]] = {}
         self._samples: dict[int, dict] = {}
@@ -88,6 +93,9 @@ class AMiTMonitor:
         """Attach a listener; the caller sends the initial snapshot this turn."""
         if self._closed:
             raise ValueError("PLC monitor is closed")
+        if not self._listeners and self._coordinator is not None:
+            # Keep ordinary polling alive even when all PLC entities are disabled.
+            self._unsub_coordinator = self._coordinator.async_add_listener(self._wake.set)
         token = object()
         self._listeners[token] = listener
         self._start_worker()
@@ -96,11 +104,19 @@ class AMiTMonitor:
         def unsubscribe() -> None:
             self._listeners.pop(token, None)
             if not self._listeners:
+                self._release_coordinator()
                 self._samples.clear()
                 self._epoch += 1
                 self._wake.set()
 
         return unsubscribe
+
+    def _release_coordinator(self) -> None:
+        """Release only the monitor's listener; entity listeners stay intact."""
+        if self._unsub_coordinator is not None:
+            unsubscribe = self._unsub_coordinator
+            self._unsub_coordinator = None
+            unsubscribe()
 
     def update_catalog(self, variables: list[Variable]) -> None:
         """Replace discovery metadata and invalidate changed definitions."""
@@ -136,7 +152,7 @@ class AMiTMonitor:
             self._wake.set()
 
     def record(self, variable: Variable, value: Any = None,
-               *, failed: bool = False) -> None:
+               *, failed: bool = False, connection_failed: bool = False) -> None:
         """Publish one actual read, including unchanged values and failures."""
         current = self._variables.get(variable.wid)
         if (not self._listeners or self._closed or current is None
@@ -158,7 +174,7 @@ class AMiTMonitor:
             "last_success": timestamp if status == "ok" else previous.get("last_success"),
         }
         self._samples[variable.wid] = sample
-        if failed:
+        if connection_failed:
             self._retry_after = monotonic() + self._interval
         self._emit({"kind": "sample", "runtime_id": self.runtime_id,
                     "sample": dict(sample)})
@@ -209,24 +225,30 @@ class AMiTMonitor:
                 epoch = self._epoch
                 revision = self._revisions[variable.wid]
                 failed = False
+                connection_failed = False
                 value = None
                 try:
                     value = await self._client.read_variable(variable)
-                except Exception:
+                except Exception as err:
                     failed = True
+                    # TimeoutError and ConnectionError are OSError subclasses.
+                    # A PLC rejection or invalid value affects only this WID.
+                    connection_failed = isinstance(err, OSError)
                 finally:
                     self._next_read = monotonic() + MIN_READ_DELAY
                 # Ignore an old session or a catalog replaced during the read.
                 if (epoch == self._epoch
                         and self._revisions.get(variable.wid) == revision):
                     self._due[variable.wid] = monotonic() + self._interval
-                    self.record(variable, value, failed=failed)
+                    self.record(variable, value, failed=failed,
+                                connection_failed=connection_failed)
         finally:
             self._task = None
 
     async def async_close(self) -> None:
         """Notify viewers and stop before the UDP client is disconnected."""
         self._closed = True
+        self._release_coordinator()
         self._emit({"kind": "unavailable", "runtime_id": self.runtime_id})
         self._listeners.clear()
         self._samples.clear()
