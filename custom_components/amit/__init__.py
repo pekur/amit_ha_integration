@@ -248,10 +248,10 @@ async def _async_setup_connected_entry(
     async def async_update_data() -> dict[int, Any]:
         """Fetch data from PLC."""
         try:
-            with monitor.normal_reads():
-                data = {}
-                for variable in variables:
-                    if variable.is_readable():
+            data = {}
+            for variable in variables:
+                if variable.is_readable():
+                    with monitor.normal_reads():
                         try:
                             value = await client.read_variable(variable)
                             variable.value = value
@@ -262,7 +262,7 @@ async def _async_setup_connected_entry(
                             data[variable.wid] = None
                             monitor.record(variable, failed=True,
                                            connection_failed=isinstance(e, OSError))
-                    await asyncio.sleep(0.02)  # Small delay between reads
+                await asyncio.sleep(0.02)  # Small delay between reads
             if data and all(value is None for value in data.values()):
                 raise UpdateFailed("Unable to read any selected PLC variable")
             return data

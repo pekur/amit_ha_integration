@@ -5,7 +5,7 @@ import json
 import struct
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from test_backups import HAStubTestCase
 from test_protocol import long_frame
@@ -40,6 +40,48 @@ class MonitorTests(HAStubTestCase):
             while self.client.read_variable.await_count < count:
                 await asyncio.sleep(0.001)
         await asyncio.wait_for(wait(), 1)
+
+    async def simulate_catalog(self, fast_count=1, duration=35):
+        """Run the actual worker against 50 variables and a virtual clock."""
+        clock, reads = [0.0], []
+        variables = [self.protocol.Variable(f"Value{i}", i, self.protocol.VarType.INT16)
+                     for i in range(50)]
+        async def read(variable):
+            clock[0] += .01
+            reads.append((variable.wid, clock[0]))
+            return variable.wid
+        self.client.read_variable.side_effect = read
+        with patch.object(self.module, "monotonic", lambda: clock[0]):
+            monitor = self.monitor(variables, variables[:fast_count], interval=10)
+            async def wait(delay):
+                clock[0] += delay
+                await asyncio.sleep(0)
+            monitor._wait = wait
+            def receive(event):
+                if event["kind"] == "sample" and clock[0] >= duration:
+                    unsubscribe()
+            unsubscribe = monitor.subscribe(receive, interval=1, wids=list(range(fast_count)))
+            await monitor._task
+        return reads
+
+    async def test_one_fast_value_keeps_its_cadence_in_large_catalog(self):
+        reads = await self.simulate_catalog()
+        times = [stamp for wid, stamp in reads if wid == 0]
+        self.assertGreater(len(times), 25)
+        self.assertLessEqual(max(b - a for a, b in zip(times, times[1:])), 1.3)
+        self.assertEqual({wid for wid, _ in reads}, set(range(50)))
+        self.assertGreaterEqual(min(b[1] - a[1] for a, b in zip(reads, reads[1:])), .2)
+
+    async def test_overloaded_fast_selection_keeps_background_and_all_selected_values_moving(self):
+        reads = await self.simulate_catalog(fast_count=7, duration=50)
+        self.assertEqual({wid for wid, _ in reads}, set(range(50)))
+        consecutive = 0
+        for wid, _ in reads:
+            consecutive = consecutive + 1 if wid < 7 else 0
+            self.assertLessEqual(consecutive, 3)
+        for wid in range(7):
+            self.assertGreater(sum(candidate == wid for candidate, _ in reads), 10)
+        self.client.write_variable.assert_not_awaited()
 
     async def test_no_viewers_do_not_read_or_cache_values(self):
         monitor = self.monitor()

@@ -60,6 +60,7 @@ class AMiTMonitor:
         self._next_read = 0.0
         self._retry_after = 0.0
         self._cursor = 0
+        self._priority_reads = 0
         self.runtime_id = uuid4().hex
         self.update_catalog(variables)
 
@@ -247,6 +248,28 @@ class AMiTMonitor:
         except asyncio.TimeoutError:
             pass
 
+    def _next_variable(self, now: float) -> Variable | None:
+        """Prefer overdue fast reads, with a background slot after three."""
+        priority, background = [], []
+        for offset in range(len(self._extras)):
+            index = (self._cursor + offset) % len(self._extras)
+            variable = self._extras[index]
+            if self._due.get(variable.wid, 0) <= now:
+                queue = priority if self._intervals[variable.wid] < self._interval else background
+                queue.append((index, variable))
+        if priority and (self._priority_reads < 3 or not background):
+            index, variable = min(priority, key=lambda item: (
+                self._due.get(item[1].wid, 0), self._intervals[item[1].wid]))
+            self._priority_reads = min(3, self._priority_reads + 1)
+        elif background:
+            index, variable = background[0]
+            self._priority_reads = 0
+            # Fast reads must not rewind the background rotation.
+            self._cursor = index + 1
+        else:
+            return None
+        return variable
+
     async def _poll(self) -> None:
         try:
             # Recent HA versions start background tasks eagerly. Let the API
@@ -258,13 +281,7 @@ class AMiTMonitor:
                 if self._normal_busy or delay > 0:
                     await self._wait(max(MIN_READ_DELAY, delay))
                     continue
-                variable = None
-                for _ in self._extras:
-                    candidate = self._extras[self._cursor % len(self._extras)]
-                    self._cursor += 1
-                    if self._due.get(candidate.wid, 0) <= now:
-                        variable = candidate
-                        break
+                variable = self._next_variable(now)
                 if variable is None:
                     await self._wait(max(MIN_READ_DELAY, min(
                         self._due[v.wid] for v in self._extras) - now))

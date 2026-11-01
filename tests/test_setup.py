@@ -131,6 +131,55 @@ class SetupTests(HAStubTestCase):
         self.client.read_variable.return_value = 456
         self.assertEqual(await coordinator.update_method(), {4001: 456})
 
+    async def test_fast_monitor_reads_continue_during_ten_second_normal_scan(self):
+        variables = [self.protocol.Variable(f"Sample{i}", 4001 + i, self.protocol.VarType.INT16)
+                     for i in range(90)]
+        extras = [self.protocol.Variable(f"Extra{i}", 5000 + i, self.protocol.VarType.INT16)
+                  for i in range(49)]
+        self.client.load_variables.return_value = variables + extras
+        self.entry.data.update(variables=[str(v.wid) for v in variables], scan_interval=10)
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        data = self.hass.data["amit"][self.entry.entry_id]
+        monitor = data["monitor"]
+        self.addAsyncCleanup(monitor.async_close)
+        normal_task, active, maximum = None, 0, 0
+        lock = asyncio.Lock()  # Model the real protocol's per-request serialization.
+        reads, samples = [], []
+        loop = asyncio.get_running_loop()
+        async def read(variable):
+            nonlocal active, maximum
+            ordinary = asyncio.current_task() is normal_task
+            async with lock:
+                active += 1
+                maximum = max(maximum, active)
+                try:
+                    await asyncio.sleep(.1 if ordinary else .01)
+                    reads.append((ordinary, variable.wid))
+                    return 123
+                finally:
+                    active -= 1
+        self.client.read_variable.side_effect = read
+        def receive(event):
+            if event["kind"] == "sample" and event["sample"]["wid"] == 4001:
+                samples.append(loop.time())
+        unsubscribe = monitor.subscribe(receive, interval=1, wids=[4001])
+        started = loop.time()
+        normal_task = asyncio.create_task(data["coordinator"].update_method())
+        try:
+            result = await asyncio.wait_for(normal_task, 20)
+        finally:
+            unsubscribe()
+            if not normal_task.done():
+                normal_task.cancel()
+                await asyncio.gather(normal_task, return_exceptions=True)
+        self.assertGreaterEqual(loop.time() - started, 10)
+        self.assertGreater(len(samples), 8)
+        self.assertLessEqual(max(b - a for a, b in zip(samples, samples[1:])), 1.3)
+        self.assertEqual(maximum, 1)
+        self.assertTrue(any(wid >= 5000 for _, wid in reads))
+        self.assertEqual([wid for ordinary, wid in reads if ordinary], [v.wid for v in variables])
+        self.assertEqual(result, {v.wid: 123 for v in variables})
+
     async def test_empty_but_successful_discovery_is_not_a_connection_failure(self):
         self.client.load_variables.return_value = []
         self.assertTrue(await self.integration.async_setup_entry(self.hass, self.entry))
