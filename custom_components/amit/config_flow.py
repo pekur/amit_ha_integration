@@ -537,13 +537,16 @@ class AMiTOptionsFlow(config_entries.OptionsFlow):
                     timeout=5.0,
                 )
                 
-                await client.connect()
-                variables = await client.load_variables(
-                    is_readonly_fn=target.is_readonly_fn,
-                    wid_min=target.wid_min,
-                    wid_max=target.wid_max,
-                )
-                await client.disconnect()
+                try:
+                    if not await client.connect():
+                        raise CannotConnect("Failed to create connection")
+                    variables = await client.load_variables(
+                        is_readonly_fn=target.is_readonly_fn,
+                        wid_min=target.wid_min,
+                        wid_max=target.wid_max,
+                    )
+                finally:
+                    await client.disconnect()
                 
                 self._variables = [
                     {"name": v.name, "wid": v.wid, "type": v.type_name}

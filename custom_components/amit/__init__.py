@@ -9,6 +9,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers import entity_registry as er
 
@@ -148,6 +149,19 @@ async def _apply_custom_names(hass: HomeAssistant, entry: ConfigEntry, custom_na
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up AMiT from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+
+    # A failed rollback may have left platforms using the previous client.
+    # Finish unloading them before replacing their runtime data.
+    previous_data = hass.data[DOMAIN].get(entry.entry_id)
+    if previous_data is not None:
+        try:
+            unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+        except Exception as err:
+            raise ConfigEntryNotReady("Unable to unload previous PLC platforms") from err
+        if not unload_ok:
+            raise ConfigEntryNotReady("Unable to unload previous PLC platforms")
+        await previous_data["client"].disconnect()
+        hass.data[DOMAIN].pop(entry.entry_id)
     
     # Create client
     client = AMiTClient(
@@ -158,7 +172,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         password=entry.data.get(CONF_PASSWORD, DEFAULT_PASSWORD),
     )
     
-    await client.connect()
+    setup_complete = False
+    try:
+        if not await client.connect():
+            raise ConnectionError("Failed to connect to PLC")
+        await _async_setup_connected_entry(hass, entry, client)
+        setup_complete = True
+    except OSError as err:
+        raise ConfigEntryNotReady("Unable to communicate with PLC") from err
+    finally:
+        if not setup_complete:
+            unload_ok = True
+            try:
+                if entry.entry_id in hass.data[DOMAIN]:
+                    # Cancellation during unload must also retain live state.
+                    unload_ok = False
+                    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+            except Exception:
+                unload_ok = False
+                _LOGGER.exception("Failed to unload platforms after setup failure")
+            finally:
+                if unload_ok:
+                    hass.data[DOMAIN].pop(entry.entry_id, None)
+                    await client.disconnect()
+
+    return True
+
+
+async def _async_setup_connected_entry(
+    hass: HomeAssistant, entry: ConfigEntry, client: AMiTClient
+) -> None:
+    """Initialize a connected entry; the caller cleans up a failed setup."""
     
     # Resolve target profile for this config entry
     target = get_target(entry.data.get(CONF_TARGET, DEFAULT_TARGET))
@@ -196,6 +240,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         _LOGGER.warning(f"Failed to read {variable.name}: {e}")
                         data[variable.wid] = None
                 await asyncio.sleep(0.02)  # Small delay between reads
+            if data and all(value is None for value in data.values()):
+                raise UpdateFailed("Unable to read any selected PLC variable")
             return data
         except Exception as e:
             raise UpdateFailed(f"Error communicating with PLC: {e}")
@@ -310,8 +356,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         hass.services.async_register(DOMAIN, SERVICE_WRITE_VARIABLE, handle_write_variable)
         hass.services.async_register(DOMAIN, SERVICE_RELOAD_VARIABLES, handle_reload_variables)
-
-    return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
