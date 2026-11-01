@@ -101,7 +101,7 @@ class AMiTMonitor:
         if self._closed:
             raise ValueError("PLC monitor is closed")
         if interval is not None and (type(interval) not in (int, float)
-                                     or not math.isfinite(interval) or not 1 <= interval <= 120):
+                                     or not 1 <= interval <= 120 or not math.isfinite(interval)):
             raise ValueError("Interval must be a finite number from 1 to 120 seconds")
         if wids is not None and (type(wids) is not list or any(
             type(wid) is not int or wid not in self._variables

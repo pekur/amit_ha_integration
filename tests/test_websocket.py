@@ -176,7 +176,8 @@ class WebSocketTests(HAStubTestCase):
 
     async def test_invalid_request_releases_registry_listener(self):
         for options in ({"interval": True}, {"interval": 121}, {"interval": "2"},
-                        {"interval": float("nan")}, {"wids": [99]}, {"wids": [True]}):
+                        {"interval": float("nan")}, {"interval": 10**400},
+                        {"interval": -(10**400)}, {"wids": [99]}, {"wids": [True]}):
             self.websocket.websocket_subscribe(self.hass, self.connection,
                 {"id": 1, "entry_id": "first", **options})
             self.assertEqual(self.connection.send_error.call_args.args[1], "invalid_request")

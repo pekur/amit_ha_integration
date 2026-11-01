@@ -213,7 +213,8 @@ class MonitorTests(HAStubTestCase):
 
     async def test_invalid_requests_do_not_attach_or_start_reads(self):
         monitor = self.monitor()
-        for interval in (True, "5", 0, .99, 120.01, float("inf"), float("nan")):
+        for interval in (True, "5", 0, .99, 120.01, float("inf"), float("nan"),
+                         10**400, -(10**400)):
             with self.subTest(interval=interval), self.assertRaises(ValueError):
                 monitor.subscribe(Mock(), interval=interval)
         for wids in ([True], [999], [3], ["1"], "1"):
