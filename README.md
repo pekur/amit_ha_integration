@@ -92,6 +92,8 @@ The **Generic** profile creates plain numeric sensors and number controls, witho
 
 Read-only variables are excluded from the writable selection. Older selections and imported backups cannot override the current profile's read-only policy; those variables remain monitored.
 
+To identify the PLC variable behind a sensor, number, switch, or binary sensor, open the entity's detail and expand **Attributes**. The `variable_name` attribute (displayed as **Variable name** in English) contains the original PLC name, alongside `wid`. It remains independent of the custom entity name and entity ID.
+
 ## Live Variable Monitor
 
 Open **AMiT Monitor** in the Home Assistant sidebar with an administrator account. The panel appears when at least one AMiT entry is loaded and the Home Assistant frontend is enabled. It supports Czech and English, follows the active theme, and adapts to mobile screens.

@@ -115,6 +115,37 @@ class ProfileEntityTests(HAStubTestCase):
         result, _ = await self.entities([variable], [1], profile="biosuntec")
         self.assertTrue(all(not entities for entities in result.values()))
 
+    async def test_variable_name_preserves_existing_attributes_and_entity_identity(self):
+        cases = [
+            ("sensor", "AMiTSensor", "TE01", self.protocol.VarType.FLOAT, "", {"variable_type": "Float"}),
+            ("number", "AMiTNumber", "Zad_UT1", self.protocol.VarType.FLOAT, "_number", {"variable_type": "Float"}),
+            ("switch", "AMiTSwitch", "Zap_UT1", self.protocol.VarType.INT16, "_switch", {"raw_value": 1}),
+            ("binary_sensor", "AMiTBinarySensor", "Por01", self.protocol.VarType.INT16, "_binary", {"raw_value": 1}),
+        ]
+        for profile in ("generic", "biosuntec", None):
+            for platform, class_name, name, var_type, suffix, attributes in cases:
+                with self.subTest(platform=platform, profile=profile):
+                    variable = self.variable(name, 0, var_type)
+                    data = {"host": "plc.invalid"}
+                    if profile is not None:
+                        data["target"] = profile
+                    entry = SimpleNamespace(entry_id="entry", data=data)
+                    coordinator = SimpleNamespace(data={0: 1})
+                    client = SimpleNamespace(read_variable=AsyncMock(), write_variable=AsyncMock())
+                    args = [coordinator]
+                    if platform in ("number", "switch"):
+                        args.append(client)
+                    entity = getattr(self.platforms[platform], class_name)(*args, variable, entry)
+                    expected = {"wid": 0, "variable_name": name, **attributes}
+                    self.assertEqual(entity.extra_state_attributes, expected)
+                    self.assertEqual(entity._attr_name, name)
+                    self.assertEqual(entity._attr_unique_id, f"entry_0{suffix}")
+                    entity._attr_name = "Custom entity name"
+                    entity.entity_id = f"{platform}.renamed"
+                    self.assertEqual(entity.extra_state_attributes, expected)
+                    client.read_variable.assert_not_awaited()
+                    client.write_variable.assert_not_awaited()
+
 
 class WritableFlowTests(HAStubTestCase):
     def setUp(self):

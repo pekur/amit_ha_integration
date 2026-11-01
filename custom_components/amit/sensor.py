@@ -93,5 +93,6 @@ class AMiTSensor(AMiTEntity, SensorEntity):
         """Return extra state attributes."""
         return {
             "wid": self._variable.wid,
+            "variable_name": self._variable.name,
             "variable_type": self._variable.type_name,
         }
