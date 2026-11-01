@@ -122,6 +122,10 @@ The monitor starts with the scan interval configured for the device in this inte
 
 This is a requested reading interval. Ordinary Home Assistant polling continues at the device interval, and its readings are shared with the monitor. Several active panels share one reader per PLC; for each variable, the shortest requested interval applies, including the device interval for panels using that setting. Values can therefore arrive more often than requested. Large catalogs and slow responses can delay readings. Check each value's reading time and age.
 
+When a variable requests an interval shorter than the device interval, its due reads take priority over other extra reads. Other variables continue to receive reading time. Monitor reads can run between individual ordinary polling requests, so a fast variable can update before the full device scan finishes. This can make an ordinary scan take longer. **Reload Variables** temporarily suspends extra monitor reads during discovery.
+
+The requested cadence depends on the available PLC reading capacity. Extra reads are sequential, with at least 0.2 seconds between them plus the response time. Seven variables therefore need more than 1.4 seconds per complete round of extra readings, even with fast replies. Requesting 1 second for all seven can exceed capacity; actual readings will arrive later.
+
 If selected variables disappear or become unreadable while the panel is suspended or disconnected, it can refresh the catalog and retry the remaining selection once. History for unchanged variables in the same device session is kept. If recovery fails, the panel reports an interval error; retry with **Apply** or **Use device interval**.
 
 ### Add selected variables as Home Assistant entities
