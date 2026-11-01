@@ -70,6 +70,7 @@ class AMiTMonitor:
         return {
             "kind": "snapshot", "runtime_id": self.runtime_id,
             "sequence": self._sequence,
+            "scan_interval": self._interval,
             "variables": [
                 {"wid": v.wid, "name": v.name, "type": v.type_name,
                  "readable": v.is_readable(), "revision": self._revisions[v.wid],

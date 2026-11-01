@@ -393,6 +393,20 @@ class SetupTests(HAStubTestCase):
         self.assertEqual(events[0]["sample"]["value"], 123)
         self.assertIsNone(monitor._task)
 
+    async def test_entry_lifecycle_updates_optional_panel(self):
+        with patch.object(self.integration, "async_update_panel", new_callable=AsyncMock) as update:
+            await self.integration.async_setup_entry(self.hass, self.entry)
+            update.assert_awaited_once_with(self.hass)
+            await self.integration.async_unload_entry(self.hass, self.entry)
+            self.assertEqual(update.await_count, 2)
+
+    async def test_setup_rollback_updates_optional_panel_after_cleanup(self):
+        self.hass.config_entries.async_forward_entry_setups.side_effect = RuntimeError("platform failed")
+        with patch.object(self.integration, "async_update_panel", new_callable=AsyncMock) as update:
+            with self.assertRaisesRegex(RuntimeError, "platform failed"):
+                await self.integration.async_setup_entry(self.hass, self.entry)
+            update.assert_awaited_once_with(self.hass)
+
     async def test_monitor_keeps_polling_without_enabled_entities_and_releases_it(self):
         await self.integration.async_setup_entry(self.hass, self.entry)
         runtime = self.hass.data["amit"][self.entry.entry_id]

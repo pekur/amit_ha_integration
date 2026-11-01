@@ -39,6 +39,7 @@ from .const import (
 from .targets import get_target
 from .protocol import AMiTClient, Variable, VarType
 from .monitor import AMiTMonitor
+from .frontend import async_setup_frontend, async_update_panel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     from .websocket import async_register_commands
 
     async_register_commands(hass)
+    await async_setup_frontend(hass)
     return True
 
 
@@ -210,6 +212,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             await monitor.async_close()
                     finally:
                         await client.disconnect()
+                    await async_update_panel(hass)
 
     return True
 
@@ -395,6 +398,8 @@ async def _async_setup_connected_entry(
         hass.services.async_register(DOMAIN, SERVICE_WRITE_VARIABLE, handle_write_variable)
         hass.services.async_register(DOMAIN, SERVICE_RELOAD_VARIABLES, handle_reload_variables)
 
+    await async_update_panel(hass)
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
@@ -412,5 +417,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data[DOMAIN]:
         hass.services.async_remove(DOMAIN, SERVICE_WRITE_VARIABLE)
         hass.services.async_remove(DOMAIN, SERVICE_RELOAD_VARIABLES)
+
+    await async_update_panel(hass)
 
     return unload_ok
