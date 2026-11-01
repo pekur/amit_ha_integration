@@ -66,8 +66,22 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.client.load_variables(), [])
         self.assertEqual(self.client._send_receive.await_count, 10)
 
+    async def test_invalid_memory_parameters_are_a_catalog_boundary(self):
+        self.client._send_receive = AsyncMock(return_value=bytes.fromhex("10 1f 04 02 25 16"))
+        self.assertEqual(await self.client.load_variables(), [])
+        self.assertEqual(self.client._send_receive.await_count, 10)
 
+    async def test_transfer_error_is_not_an_empty_catalog(self):
+        self.client._send_receive = AsyncMock(return_value=bytes.fromhex("10 1f 04 01 24 16"))
+        with self.assertRaises(ConnectionError):
+            await self.client.load_variables()
 
+    async def test_corrupt_catalog_frames_are_not_an_empty_catalog(self):
+        frame = bytearray(self.slot())
+        frame[-2] ^= 1
+        self.client._send_receive = AsyncMock(return_value=bytes(frame))
+        with self.assertRaises(ConnectionError):
+            await self.client.load_variables()
 
     async def test_all_timeouts_raise_instead_of_empty_success(self):
         self.client._send_receive = AsyncMock(side_effect=TimeoutError("offline"))

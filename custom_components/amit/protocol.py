@@ -14,6 +14,7 @@ _LOGGER = logging.getLogger(__name__)
 
 HEADER_SIZE = 15
 TYPE_SYNC_KEY = 0x1111
+MAX_KEY_SYNC_RETRIES = 2
 
 
 class VarType(IntEnum):
@@ -94,30 +95,47 @@ def _encrypt_msg(msg: bytearray, password: int) -> None:
 
 
 def _parse_response(data: bytes) -> Tuple[int, int, int, bytes]:
-    """Parse a DB-Net response frame."""
+    """Validate and parse a DB-Net response frame.
+
+    Frame layout and FCS: AMiT's DB-Net specification, sections Frame and Errors
+    (https://jvalter.cz/sites/default/files/soubory/dbnet101.html).
+    """
     if len(data) < 6:
         raise ValueError("Frame too short")
+    if data[-1] != 0x16:
+        raise ValueError("Invalid frame terminator")
     
     frame_type = data[0]
     
     if frame_type == 0x10:
+        if len(data) != 6:
+            raise ValueError("Invalid short frame length")
+        if _calc_checksum(data[1:4]) != data[4]:
+            raise ValueError("Invalid frame checksum")
         dest_addr = data[1]
         src_addr = data[2]
         fcb = data[3]
-        status = fcb & 0x0F
-        return dest_addr, src_addr, status, b''
+        value_data = b''
     
     elif frame_type == 0x68:
         data_len = data[1]
+        if data_len < 4 or len(data) != data_len + 6:
+            raise ValueError("Invalid long frame length")
+        if data[2] != data_len or data[3] != 0x68:
+            raise ValueError("Invalid long frame header")
+        if _calc_checksum(data[4:-2]) != data[-2]:
+            raise ValueError("Invalid frame checksum")
         dest_addr = data[4]
         src_addr = data[5]
         fcb = data[6]
-        status = fcb & 0x0F
-        value_data = data[8:8 + data_len - 4]
-        return dest_addr, src_addr, status, value_data
+        value_data = data[8:-2]
     
     else:
         raise ValueError(f"Unknown frame type: 0x{frame_type:02x}")
+
+    if dest_addr > 31 or src_addr > 31 or fcb & 0xC0:
+        raise ValueError("Invalid response address or control byte")
+    return dest_addr, src_addr, fcb & 0x0F, value_data
 
 
 class AMiTProtocol(asyncio.DatagramProtocol):
@@ -126,6 +144,7 @@ class AMiTProtocol(asyncio.DatagramProtocol):
     def __init__(self):
         self.transport = None
         self._response_future: Optional[asyncio.Future] = None
+        self._response_validator: Optional[Callable] = None
     
     def connection_made(self, transport):
         self.transport = transport
@@ -134,7 +153,12 @@ class AMiTProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data, addr):
         _LOGGER.debug(f"Received {len(data)} bytes from {addr}")
         if self._response_future and not self._response_future.done():
-            self._response_future.set_result(data)
+            try:
+                response = self._response_validator(data) if self._response_validator else data
+            except (ValueError, struct.error) as err:
+                _LOGGER.debug("Ignoring invalid or unrelated datagram: %s", err)
+                return
+            self._response_future.set_result(response)
         else:
             _LOGGER.warning(f"Received data but no future waiting: {len(data)} bytes")
     
@@ -144,6 +168,9 @@ class AMiTProtocol(asyncio.DatagramProtocol):
             self._response_future.set_exception(exc)
     
     def connection_lost(self, exc):
+        if self._response_future and not self._response_future.done():
+            self._response_future.set_exception(ConnectionError("UDP connection lost"))
+        self.transport = None
         if exc:
             _LOGGER.error(f"UDP connection lost with error: {exc}")
         else:
@@ -198,6 +225,10 @@ class AMiTClient:
     
     async def disconnect(self) -> None:
         """Close connection."""
+        if self._protocol:
+            future = self._protocol._response_future
+            if future and not future.done():
+                future.set_exception(ConnectionError("Disconnected from PLC"))
         if self._transport:
             self._transport.close()
             self._transport = None
@@ -206,10 +237,16 @@ class AMiTClient:
         _LOGGER.info("Disconnected from AMiT PLC")
     
     async def test_connection(self, test_wid: int = 4000) -> bool:
-        """Test connection by reading a simple value."""
+        """Test a validated round trip without requiring a particular variable.
+
+        A PLC error reply also confirms reachability. Discovery and subsequent
+        reads check capabilities and values; this legacy probe only checks that
+        the configured endpoint responds with a valid, matching frame.
+        """
         try:
-            _LOGGER.debug(f"Testing connection - reading WID {test_wid}...")
-            await self._send_receive(self._create_read_frame(test_wid, VarType.INT16))
+            _LOGGER.debug(f"Testing connection - probing WID {test_wid}...")
+            response = await self._send_receive(self._create_read_frame(test_wid, VarType.INT16))
+            self._validate_response(response, 0x01)
             _LOGGER.debug("Connection test successful")
             return True
         except TimeoutError as e:
@@ -293,63 +330,84 @@ class AMiTClient:
         async with self._lock:
             return await self._send_receive_internal(payload)
     
-    async def _send_receive_internal(self, payload: bytes) -> bytes:
-        """Internal send/receive without lock (for recursion after key sync)."""
-        if not self._transport or not self._protocol:
-            raise RuntimeError("Not connected")
-        
-        # Build header
-        header = bytearray(15)
-        struct.pack_into('<i', header, 0, self._transaction_id)
-        struct.pack_into('<h', header, 4, 0)
-        struct.pack_into('<I', header, 6, self._key)
-        struct.pack_into('<I', header, 10, 0)
-        header[14] = len(payload) - 6
-        
-        msg = header + bytearray(payload)
-        _encrypt_msg(msg, self.password)
-        
-        frame_cs = _calc_checksum(payload[4:4+payload[1]])
-        cs_input = self._transaction_id + self._key + frame_cs + 256
-        checksum = _randomize(self.password, cs_input)
-        struct.pack_into('<I', msg, 10, checksum)
-        
-        # Create NEW future for response
-        loop = asyncio.get_running_loop()
-        self._protocol._response_future = loop.create_future()
-        
-        # Send
-        _LOGGER.debug(f"Sending {len(msg)} bytes, transaction_id={self._transaction_id}")
-        self._transport.sendto(bytes(msg))
-        self._transaction_id += 1
-        
-        # Wait for response with timeout
-        try:
-            data = await asyncio.wait_for(
-                self._protocol._response_future,
-                timeout=self.timeout
-            )
-        except asyncio.TimeoutError:
-            self._protocol._response_future = None
-            raise TimeoutError("No response from PLC")
-        finally:
-            self._protocol._response_future = None
-        
-        # Check for key sync
+    def _validate_response(self, response: bytes, function: int) -> Tuple[int, bytes]:
+        """Check the response belongs to this station and requested function."""
+        dest, src, status, value_data = _parse_response(response)
+        if dest != (self.client_addr & 0x1F) or src != (self.station_addr & 0x1F):
+            raise ValueError("Response addresses do not match request")
+        if status in (0x00, 0x08):
+            if response[0] == 0x68:
+                if response[7] != (function | 0x80):
+                    raise ValueError("Response function does not match request")
+            elif function in (0x01, 0x03):
+                raise ValueError("Read response contains no data")
+        return status, value_data
+
+    def _decode_response(self, data: bytes, transaction_id: int, function: int) -> Tuple[int, int, bytes]:
+        """Validate the UDP envelope before accepting its key or payload."""
+        if len(data) < 10:
+            raise ValueError("UDP header too short")
+        if struct.unpack_from('<I', data, 0)[0] != transaction_id:
+            raise ValueError("Response transaction does not match request")
         resp_type = struct.unpack_from('<h', data, 4)[0]
+        key = struct.unpack_from('<I', data, 6)[0]
         if resp_type == TYPE_SYNC_KEY:
-            self._key = struct.unpack_from('<I', data, 6)[0]
+            # Existing key-sync handling uses only this header prefix. Its
+            # optional trailing fields are undocumented, so leave them alone.
+            return resp_type, key, b''
+        if len(data) < HEADER_SIZE or len(data) != HEADER_SIZE + data[14] + 6:
+            raise ValueError("Invalid UDP payload length")
+        response = bytearray(data)
+        _encrypt_msg(response, self.password)
+        frame = bytes(response[HEADER_SIZE:])
+        self._validate_response(frame, function)
+        # The UDP checksum's receive-side formula is not documented here;
+        # validate the inner FCS without guessing an envelope algorithm.
+        return resp_type, key, frame
+
+    async def _send_receive_internal(self, payload: bytes) -> bytes:
+        """Exchange one request, with a bounded number of key synchronizations."""
+        for attempt in range(MAX_KEY_SYNC_RETRIES + 1):
+            if not self._transport or not self._protocol:
+                raise ConnectionError("Not connected")
+            transport, protocol = self._transport, self._protocol
+            transaction_id = self._transaction_id
+            header = bytearray(HEADER_SIZE)
+            struct.pack_into('<I', header, 0, transaction_id)
+            struct.pack_into('<h', header, 4, 0)
+            struct.pack_into('<I', header, 6, self._key)
+            header[14] = len(payload) - 6
+            msg = header + bytearray(payload)
+            _encrypt_msg(msg, self.password)
+            frame_cs = _calc_checksum(payload[4:4 + payload[1]])
+            checksum = _randomize(self.password, transaction_id + self._key + frame_cs + 256)
+            struct.pack_into('<I', msg, 10, checksum)
+
+            future = asyncio.get_running_loop().create_future()
+            protocol._response_future = future
+            protocol._response_validator = lambda data: self._decode_response(
+                data, transaction_id, payload[7]
+            )
+            self._transaction_id = (transaction_id + 1) & 0xFFFFFFFF or 1
+            try:
+                _LOGGER.debug("Sending %d bytes, transaction_id=%d", len(msg), transaction_id)
+                transport.sendto(bytes(msg))
+                resp_type, key, frame = await asyncio.wait_for(future, timeout=self.timeout)
+            except asyncio.TimeoutError as err:
+                raise TimeoutError("No response from PLC") from err
+            finally:
+                if protocol._response_future is future:
+                    protocol._response_future = None
+                    protocol._response_validator = None
+                if not future.done():
+                    future.cancel()
+
+            self._key = key
+            if resp_type != TYPE_SYNC_KEY:
+                return frame
+            if attempt == MAX_KEY_SYNC_RETRIES:
+                raise ConnectionError("Too many PLC key synchronizations")
             _LOGGER.debug("Key sync received, retrying...")
-            # Retry with new key (recursive call without lock)
-            return await self._send_receive_internal(payload)
-        
-        self._key = struct.unpack_from('<I', data, 6)[0]
-        
-        # Decrypt
-        resp = bytearray(data)
-        _encrypt_msg(resp, self.password)
-        
-        return bytes(resp[15:])
     
     async def read_variable(self, variable: Variable) -> Any:
         """Read a variable value from PLC."""
@@ -358,9 +416,12 @@ class AMiTClient:
         
         frame = self._create_read_frame(variable.wid, variable.var_type)
         response = await self._send_receive(frame)
-        _, _, status, value_data = _parse_response(response)
+        status, value_data = self._validate_response(response, 0x01)
+        if status not in (0x00, 0x08):
+            raise RuntimeError(f"PLC rejected read of {variable.name}: status {status}")
         
-        if len(value_data) < 2:
+        expected_size = 2 if variable.var_type == VarType.INT16 else 4
+        if len(value_data) != expected_size:
             raise RuntimeError(f"Invalid response for {variable.name}")
         
         if variable.var_type == VarType.INT16:
@@ -380,7 +441,7 @@ class AMiTClient:
         
         frame = self._create_write_frame(variable.wid, value, variable.var_type)
         response = await self._send_receive(frame)
-        _, _, status, _ = _parse_response(response)
+        status, _ = self._validate_response(response, 0x02)
         
         return status in (0x00, 0x08)
     
@@ -439,15 +500,16 @@ class AMiTClient:
                 frame = self._create_read_memory_frame(0xFFFD0000 + index, 26)
                 response = await self._send_receive(frame)
                 last_error = None
-                if len(response) < 10 or response[0] != 0x68:
+                status, data = self._validate_response(response, 0x03)
+                if status == 0x02:
+                    # Invalid memory parameters mark a catalog boundary.
                     consecutive_failures += 1
                     index += 1
                     continue
-                data = response[8:4+response[1]]
+                if status not in (0x00, 0x08):
+                    raise RuntimeError(f"PLC rejected catalog read: status {status}")
                 if len(data) < 22:
-                    consecutive_failures += 1
-                    index += 1
-                    continue
+                    raise ValueError("Catalog response is too short")
                 
                 wid = struct.unpack_from('<H', data, 8)[0]
                 var_type_code = data[2]
@@ -524,10 +586,8 @@ class AMiTClient:
                 response = await self._send_receive(
                     self._create_read_memory_frame(0xFFFD0000 + last_valid_index, 26)
                 )
-                if (
-                    len(response) < 10 or response[0] != 0x68
-                    or len(response[8:4 + response[1]]) < 22
-                ):
+                status, probe_data = self._validate_response(response, 0x03)
+                if status not in (0x00, 0x08) or len(probe_data) < 22:
                     raise ValueError("Invalid catalog probe response")
             except Exception as err:
                 raise ConnectionError("Failed to load variable catalog from PLC") from err

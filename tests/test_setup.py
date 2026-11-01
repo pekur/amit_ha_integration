@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from test_backups import HAStubTestCase, module
+from test_protocol import long_frame, short_frame
 
 
 class ConfigEntryNotReady(Exception):
@@ -230,6 +231,34 @@ class SetupTests(HAStubTestCase):
                 if outcome == "connect_failed":
                     self.client.load_variables.assert_not_awaited()
 
+    async def test_config_validation_does_not_require_wid_4000_or_int16(self):
+        import struct
+
+        for probe_response in (short_frame(status=2), long_frame(struct.pack("<f", 22.5))):
+            with self.subTest(probe_response=probe_response.hex()):
+                client = self.protocol.AMiTClient("plc.invalid")
+                client._connected = True
+                client.connect = AsyncMock(return_value=True)
+                client.disconnect = AsyncMock()
+
+                async def reply(frame):
+                    if frame[7] == 1:
+                        return probe_response
+                    index = struct.unpack_from("<I", frame, 8)[0] - 0xFFFD0000
+                    data = bytearray(26)
+                    if index == 0:
+                        data[2] = 2
+                        struct.pack_into("<H", data, 8, 5000)
+                        data[12:17] = b"Valid"
+                    return long_frame(bytes(data), function=0x83)
+
+                client._send_receive = AsyncMock(side_effect=reply)
+                with patch.object(self.flow_module, "AMiTClient", return_value=client):
+                    info = await self.flow_module.validate_connection(
+                        self.hass, {"host": "plc.invalid", "target": "generic"},
+                    )
+                self.assertEqual(info["variables"], [{"wid": 5000, "name": "Valid", "type": "Float"}])
+                client.disconnect.assert_awaited_once()
 
 
 
