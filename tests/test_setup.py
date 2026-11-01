@@ -47,6 +47,7 @@ class SetupTests(HAStubTestCase):
         self.other_entry = {"client": object()}
         self.hass = SimpleNamespace(
             data={"amit": {"other_entry": self.other_entry}},
+            async_create_background_task=lambda coro, name: asyncio.create_task(coro, name=name),
             services=SimpleNamespace(has_service=Mock(return_value=True), async_register=Mock()),
             config_entries=SimpleNamespace(
                 async_forward_entry_setups=AsyncMock(),
@@ -365,6 +366,77 @@ class SetupTests(HAStubTestCase):
         other_coordinator.async_request_refresh.assert_awaited_once()
         self.client.write_variable.assert_not_awaited()
         runtime["coordinator"].async_request_refresh.assert_not_awaited()
+
+    async def test_monitor_reuses_ordinary_poll_without_extra_requests(self):
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        runtime = self.hass.data["amit"][self.entry.entry_id]
+        monitor = runtime["monitor"]
+        self.addAsyncCleanup(monitor.async_close)
+        events = []
+        monitor.subscribe(events.append)
+        self.client.read_variable.reset_mock()
+        await runtime["coordinator"].update_method()
+        self.client.read_variable.assert_awaited_once_with(self.variable)
+        self.assertEqual(events[0]["sample"]["value"], 123)
+        self.assertIsNone(monitor._task)
+
+    async def test_failed_unload_keeps_monitor_until_platforms_can_unload(self):
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        monitor = self.hass.data["amit"][self.entry.entry_id]["monitor"]
+        self.addAsyncCleanup(monitor.async_close)
+        events = []
+        monitor.subscribe(events.append)
+        self.hass.config_entries.async_unload_platforms.return_value = False
+        self.assertFalse(await self.integration.async_unload_entry(self.hass, self.entry))
+        self.assertFalse(monitor.closed)
+        monitor.record(self.variable, 8)
+        self.assertEqual(events[-1]["sample"]["value"], 8)
+        self.client.disconnect.assert_not_awaited()
+        self.hass.config_entries.async_unload_platforms.return_value = True
+        self.assertTrue(await self.integration.async_unload_entry(self.hass, self.entry))
+        self.assertTrue(monitor.closed)
+        self.assertEqual(events[-1]["kind"], "unavailable")
+
+    async def test_setup_rollback_closes_monitor_attached_by_platform(self):
+        events = []
+        monitors = []
+        async def fail_platform_setup(*args):
+            monitor = self.hass.data["amit"][self.entry.entry_id]["monitor"]
+            monitors.append(monitor)
+            monitor.subscribe(events.append)
+            raise RuntimeError("platform failed")
+        self.hass.config_entries.async_forward_entry_setups.side_effect = fail_platform_setup
+        with self.assertRaisesRegex(RuntimeError, "platform failed"):
+            await self.integration.async_setup_entry(self.hass, self.entry)
+        self.assertTrue(monitors[0].closed)
+        self.assertEqual(events[-1]["kind"], "unavailable")
+        self.assert_clean_failure()
+
+    async def test_reload_button_updates_monitor_catalog(self):
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        runtime = self.hass.data["amit"][self.entry.entry_id]
+        self.hass.services.async_call = AsyncMock()
+        changed = self.protocol.Variable("Changed", 4001, self.protocol.VarType.ARRAY)
+        self.client.load_variables.return_value = [changed]
+        await self.button_module.AMiTReloadButton(self.hass, self.entry).async_press()
+        self.assertEqual(runtime["all_variables"], [changed])
+        catalog = runtime["monitor"].snapshot()["variables"]
+        self.assertEqual(catalog[0]["name"], "Changed")
+        self.assertFalse(catalog[0]["readable"])
+
+    async def test_reload_service_updates_each_monitor_catalog(self):
+        self.hass.data["amit"].clear()
+        handlers = {}
+        self.hass.services.has_service.return_value = False
+        self.hass.services.async_register.side_effect = lambda domain, name, handler: handlers.update({name: handler})
+        self.hass.config_entries.async_get_entry = Mock(return_value=self.entry)
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        changed = self.protocol.Variable("Changed", 4001, self.protocol.VarType.ARRAY)
+        self.client.load_variables.return_value = [changed]
+        await handlers["reload_variables"](SimpleNamespace(data={}))
+        runtime = self.hass.data["amit"][self.entry.entry_id]
+        self.assertEqual(runtime["all_variables"], [changed])
+        self.assertEqual(runtime["monitor"].snapshot()["variables"][0]["name"], "Changed")
 
 
 if __name__ == "__main__":

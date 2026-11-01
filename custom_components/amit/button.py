@@ -188,12 +188,14 @@ class AMiTReloadButton(ButtonEntity):
         client = data["client"]
         target = get_target(self._entry.data.get(CONF_TARGET, DEFAULT_TARGET))
 
-        all_vars = await client.load_variables(
-            is_readonly_fn=target.is_readonly_fn,
-            wid_min=target.wid_min,
-            wid_max=target.wid_max,
-        )
+        with data["monitor"].normal_reads():
+            all_vars = await client.load_variables(
+                is_readonly_fn=target.is_readonly_fn,
+                wid_min=target.wid_min,
+                wid_max=target.wid_max,
+            )
         data["all_variables"] = all_vars
+        data["monitor"].update_catalog(all_vars)
         
         _LOGGER.info(f"Reloaded {len(all_vars)} variables from PLC")
         

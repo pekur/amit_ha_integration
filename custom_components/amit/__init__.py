@@ -38,8 +38,17 @@ from .const import (
 )
 from .targets import get_target
 from .protocol import AMiTClient, Variable, VarType
+from .monitor import AMiTMonitor
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register the live API once; PLC entry setup remains independent."""
+    from .websocket import async_register_commands
+
+    async_register_commands(hass)
+    return True
 
 
 async def _apply_custom_names_and_ids(
@@ -160,6 +169,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             raise ConfigEntryNotReady("Unable to unload previous PLC platforms") from err
         if not unload_ok:
             raise ConfigEntryNotReady("Unable to unload previous PLC platforms")
+        if monitor := previous_data.get("monitor"):
+            await monitor.async_close()
         await previous_data["client"].disconnect()
         hass.data[DOMAIN].pop(entry.entry_id)
     
@@ -193,8 +204,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.exception("Failed to unload platforms after setup failure")
             finally:
                 if unload_ok:
-                    hass.data[DOMAIN].pop(entry.entry_id, None)
-                    await client.disconnect()
+                    data = hass.data[DOMAIN].pop(entry.entry_id, None)
+                    try:
+                        if data and (monitor := data.get("monitor")):
+                            await monitor.async_close()
+                    finally:
+                        await client.disconnect()
 
     return True
 
@@ -225,21 +240,28 @@ async def _async_setup_connected_entry(
     # Create variable lookup
     variables_by_wid = {v.wid: v for v in variables}
     variables_by_name = {v.name: v for v in variables}
+    scan_interval = entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    monitor = AMiTMonitor(
+        hass, client, all_variables, variables, scan_interval, target.entity_rules
+    )
     
     async def async_update_data() -> dict[int, Any]:
         """Fetch data from PLC."""
         try:
-            data = {}
-            for variable in variables:
-                if variable.is_readable():
-                    try:
-                        value = await client.read_variable(variable)
-                        variable.value = value
-                        data[variable.wid] = value
-                    except Exception as e:
-                        _LOGGER.warning(f"Failed to read {variable.name}: {e}")
-                        data[variable.wid] = None
-                await asyncio.sleep(0.02)  # Small delay between reads
+            with monitor.normal_reads():
+                data = {}
+                for variable in variables:
+                    if variable.is_readable():
+                        try:
+                            value = await client.read_variable(variable)
+                            variable.value = value
+                            data[variable.wid] = value
+                            monitor.record(variable, value)
+                        except Exception as e:
+                            _LOGGER.warning(f"Failed to read {variable.name}: {e}")
+                            data[variable.wid] = None
+                            monitor.record(variable, failed=True)
+                    await asyncio.sleep(0.02)  # Small delay between reads
             if data and all(value is None for value in data.values()):
                 raise UpdateFailed("Unable to read any selected PLC variable")
             return data
@@ -247,7 +269,6 @@ async def _async_setup_connected_entry(
             raise UpdateFailed(f"Error communicating with PLC: {e}")
     
     # Create coordinator
-    scan_interval = entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
@@ -265,6 +286,7 @@ async def _async_setup_connected_entry(
     hass.data[DOMAIN][entry.entry_id] = {
         "client": client,
         "coordinator": coordinator,
+        "monitor": monitor,
         "variables": variables,
         "variables_by_wid": variables_by_wid,
         "variables_by_name": variables_by_name,
@@ -358,12 +380,14 @@ async def _async_setup_connected_entry(
                 _target = get_target(
                     _entry.data.get(CONF_TARGET, DEFAULT_TARGET) if _entry else DEFAULT_TARGET
                 )
-                all_vars = await _client.load_variables(
-                    is_readonly_fn=_target.is_readonly_fn,
-                    wid_min=_target.wid_min,
-                    wid_max=_target.wid_max,
-                )
+                with entry_data["monitor"].normal_reads():
+                    all_vars = await _client.load_variables(
+                        is_readonly_fn=_target.is_readonly_fn,
+                        wid_min=_target.wid_min,
+                        wid_max=_target.wid_max,
+                    )
                 entry_data["all_variables"] = all_vars
+                entry_data["monitor"].update_catalog(all_vars)
                 _LOGGER.info("Reloaded %d variables from PLC (entry %s)", len(all_vars), eid)
 
         hass.services.async_register(DOMAIN, SERVICE_WRITE_VARIABLE, handle_write_variable)
@@ -376,7 +400,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id)
-        await data["client"].disconnect()
+        try:
+            if monitor := data.get("monitor"):
+                await monitor.async_close()
+        finally:
+            await data["client"].disconnect()
 
     # Unregister services when the last entry is removed
     if not hass.data[DOMAIN]:
