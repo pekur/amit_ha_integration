@@ -11,8 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .entity import AMiTEntity
-from .biosuntec.heuristics import is_switch_control, is_offset_value, is_temperature_setpoint, is_temperature
+from .entity import AMiTEntity, get_entity_rules
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,6 +28,7 @@ async def async_setup_entry(
     client = data["client"]
     variables = data["variables"]
     writable_wids = data["writable_wids"]
+    rules = get_entity_rules(entry)
     
     entities = []
     
@@ -37,8 +37,8 @@ async def async_setup_entry(
         # 1. Variable is in writable_wids (user marked it as writable)
         # 2. Variable is readable (numeric type)
         # 3. Variable is NOT a switch-like INT16 (those go to switch platform)
-        if variable.wid in writable_wids and variable.is_readable():
-            if variable.var_type == VarType.INT16 and is_switch_control(variable.name):
+        if variable.writable and variable.wid in writable_wids and variable.is_readable():
+            if variable.var_type == VarType.INT16 and rules and rules.is_switch_control(variable.name):
                 # This goes to switch platform
                 continue
             entities.append(AMiTNumber(coordinator, client, variable, entry))
@@ -65,18 +65,18 @@ class AMiTNumber(AMiTEntity, NumberEntity):
         self._attr_mode = NumberMode.BOX
         
         # Set appropriate min/max based on variable type and name
-        if is_offset_value(variable.name):
+        if self._rules and self._rules.is_offset_value(variable.name):
             # Offset/hysteresis values - small range around zero
             self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
             self._attr_native_min_value = -10.0
             self._attr_native_max_value = 10.0
             self._attr_native_step = 0.1
-        elif is_temperature(variable.name, variable.var_type):
+        elif self._rules and self._rules.is_temperature(variable.name, variable.var_type):
             self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
             self._attr_native_min_value = -50.0
             self._attr_native_max_value = 100.0
             self._attr_native_step = 0.1
-        elif is_temperature_setpoint(variable.name):
+        elif self._rules and self._rules.is_temperature_setpoint(variable.name):
             self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
             self._attr_native_min_value = 5.0
             self._attr_native_max_value = 35.0

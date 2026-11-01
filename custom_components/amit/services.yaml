@@ -1,6 +1,6 @@
 write_variable:
   name: Write Variable
-  description: Write a value to an AMiT PLC variable.
+  description: Write a value to a monitored AMiT PLC variable enabled for writing.
   fields:
     wid:
       name: WID
@@ -8,8 +8,8 @@ write_variable:
       example: 4813
       selector:
         number:
-          min: 4000
-          max: 6000
+          min: 0
+          max: 65535
           mode: box
     name:
       name: Variable Name
@@ -25,6 +25,11 @@ write_variable:
       selector:
         number:
           mode: box
+    entry_id:
+      name: Config entry ID
+      description: Required when multiple PLCs are configured.
+      selector:
+        text:
 
 reload_variables:
   name: Reload Variables

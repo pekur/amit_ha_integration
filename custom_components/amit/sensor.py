@@ -15,8 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .entity import AMiTEntity
-from .biosuntec.heuristics import is_binary_state, is_temperature
+from .entity import AMiTEntity, get_entity_rules
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,6 +31,7 @@ async def async_setup_entry(
     coordinator = data["coordinator"]
     variables = data["variables"]
     writable_wids = data["writable_wids"]
+    rules = get_entity_rules(entry)
     
     entities = []
     
@@ -40,8 +40,8 @@ async def async_setup_entry(
         # 1. Variable is readable (numeric type)
         # 2. Variable is NOT marked as writable by user
         # 3. Variable is not BOOL type (those go to binary_sensor)
-        if variable.is_readable() and variable.wid not in writable_wids:
-            if variable.var_type != VarType.INT16 or not is_binary_state(variable.name):
+        if variable.is_readable() and (not variable.writable or variable.wid not in writable_wids):
+            if variable.var_type != VarType.INT16 or not (rules and rules.is_binary_state(variable.name)):
                 # Numeric sensors (not binary states)
                 entities.append(AMiTSensor(coordinator, variable, entry))
     
@@ -64,7 +64,7 @@ class AMiTSensor(AMiTEntity, SensorEntity):
         self._attr_name = variable.name
 
         # Determine device class and unit
-        if is_temperature(variable.name, variable.var_type):
+        if self._rules and self._rules.is_temperature(variable.name, variable.var_type):
             self._attr_device_class = SensorDeviceClass.TEMPERATURE
             self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
             self._attr_state_class = SensorStateClass.MEASUREMENT
@@ -79,7 +79,8 @@ class AMiTSensor(AMiTEntity, SensorEntity):
             return None
         
         # Filter out invalid temperature readings (146.19 = disconnected sensor)
-        if is_temperature(self._variable.name, self._variable.var_type) and isinstance(value, float):
+        if (self._rules and self._rules.is_temperature(self._variable.name, self._variable.var_type)
+                and isinstance(value, float)):
             if value > 100 or value < -50:
                 return None
         

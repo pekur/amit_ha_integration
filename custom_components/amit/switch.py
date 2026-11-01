@@ -10,8 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .entity import AMiTEntity
-from .biosuntec.heuristics import is_switch_control
+from .entity import AMiTEntity, get_entity_rules
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,6 +27,7 @@ async def async_setup_entry(
     client = data["client"]
     variables = data["variables"]
     writable_wids = data["writable_wids"]
+    rules = get_entity_rules(entry)
     
     entities = []
     
@@ -35,8 +35,8 @@ async def async_setup_entry(
         # Create switch only if:
         # 1. Variable is in writable_wids (user marked it as writable)
         # 2. Variable is INT16 with switch-like name
-        if variable.wid in writable_wids:
-            if variable.var_type == VarType.INT16 and is_switch_control(variable.name):
+        if variable.writable and variable.wid in writable_wids:
+            if variable.var_type == VarType.INT16 and rules and rules.is_switch_control(variable.name):
                 entities.append(AMiTSwitch(coordinator, client, variable, entry))
     
     async_add_entities(entities)

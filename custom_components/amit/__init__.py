@@ -259,6 +259,8 @@ async def _async_setup_connected_entry(
     # Fetch initial data
     await coordinator.async_config_entry_first_refresh()
     
+    configured_writable_wids = {str(w) for w in entry.data.get(CONF_WRITABLE_VARIABLES, [])}
+
     # Store data
     hass.data[DOMAIN][entry.entry_id] = {
         "client": client,
@@ -267,7 +269,11 @@ async def _async_setup_connected_entry(
         "variables_by_wid": variables_by_wid,
         "variables_by_name": variables_by_name,
         "all_variables": all_variables,
-        "writable_wids": set(int(w) for w in entry.data.get(CONF_WRITABLE_VARIABLES, [])),
+        "writable_wids": {
+            v.wid for v in variables
+            if v.writable and v.is_readable()
+            and str(v.wid) in configured_writable_wids
+        },
     }
     
     # Set up platforms
@@ -304,7 +310,7 @@ async def _async_setup_connected_entry(
             name = call.data.get("name")
             value = call.data["value"]
 
-            if wid:
+            if wid is not None:
                 variable = _variables_by_wid.get(int(wid))
             elif name:
                 variable = _variables_by_name.get(name)
@@ -314,6 +320,10 @@ async def _async_setup_connected_entry(
 
             if variable is None:
                 _LOGGER.error("Variable not found: wid=%s, name=%s", wid, name)
+                return
+
+            if not variable.writable or variable.wid not in entry_data["writable_wids"]:
+                _LOGGER.error("Variable is not enabled for writing: %s", variable.name)
                 return
 
             try:

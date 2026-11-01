@@ -257,10 +257,53 @@ class SetupTests(HAStubTestCase):
                     info = await self.flow_module.validate_connection(
                         self.hass, {"host": "plc.invalid", "target": "generic"},
                     )
-                self.assertEqual(info["variables"], [{"wid": 5000, "name": "Valid", "type": "Float"}])
+                self.assertEqual(info["variables"], [{"wid": 5000, "name": "Valid", "type": "Float", "writable": True}])
                 client.disconnect.assert_awaited_once()
 
+    async def test_runtime_writable_set_excludes_readonly_and_unsupported_variables(self):
+        readonly = self.protocol.Variable("TE01", 4002, self.protocol.VarType.FLOAT, writable=False)
+        unsupported = self.protocol.Variable("Array", 4003, self.protocol.VarType.ARRAY)
+        self.client.load_variables.return_value.extend([readonly, unsupported])
+        self.entry.data["variables"] = ["4001", "4002", "4003"]
+        self.entry.data["writable_variables"] = ["4001", "4002", "4003", "9999"]
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        runtime = self.hass.data["amit"][self.entry.entry_id]
+        self.assertEqual(runtime["writable_wids"], {4001})
+        self.assertIn(readonly, runtime["variables"])
 
+    async def test_service_obeys_writable_selection_and_handles_zero_wid_and_name(self):
+        control = self.protocol.Variable("Control", 0, self.protocol.VarType.INT16)
+        readonly = self.protocol.Variable("Locked", 4002, self.protocol.VarType.FLOAT, writable=False)
+        self.client.load_variables.return_value = [control, self.variable, readonly]
+        self.client.write_variable = AsyncMock(return_value=True)
+        self.entry.data.update({
+            "target": "generic", "variables": ["0", "4001", "4002"],
+            "writable_variables": ["0", "4002"],
+        })
+        handlers = {}
+        self.hass.services.has_service.return_value = False
+        self.hass.services.async_register.side_effect = lambda domain, name, handler: handlers.update({name: handler})
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        runtime = self.hass.data["amit"][self.entry.entry_id]
+        runtime["coordinator"].async_request_refresh = AsyncMock()
+
+        for target in ({"wid": 4001}, {"wid": 4002}, {"name": "Locked"}, {"wid": 9999}):
+            with self.subTest(target=target):
+                with self.assertLogs(self.integration.__name__, level="ERROR"):
+                    await handlers["write_variable"](SimpleNamespace(data={
+                        "entry_id": self.entry.entry_id, "value": 42, **target,
+                    }))
+                self.client.write_variable.assert_not_awaited()
+
+        await handlers["write_variable"](SimpleNamespace(data={
+            "entry_id": self.entry.entry_id, "wid": 0, "value": 42,
+        }))
+        self.client.write_variable.assert_awaited_once_with(control, 42)
+        self.client.write_variable.reset_mock()
+        await handlers["write_variable"](SimpleNamespace(data={
+            "entry_id": self.entry.entry_id, "name": "Control", "value": 43,
+        }))
+        self.client.write_variable.assert_awaited_once_with(control, 43)
 
 
 

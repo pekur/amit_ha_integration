@@ -5,7 +5,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, CONF_HOST
+from .const import DOMAIN, CONF_HOST, CONF_TARGET, DEFAULT_TARGET
+from .targets import EntityRules, get_target
+
+
+def get_entity_rules(entry: ConfigEntry) -> EntityRules | None:
+    """Resolve classification rules, including the legacy Biosuntec fallback."""
+    return get_target(entry.data.get(CONF_TARGET, DEFAULT_TARGET)).entity_rules
 
 
 def get_device_info(entry: ConfigEntry) -> DeviceInfo:
@@ -25,4 +31,5 @@ class AMiTEntity(CoordinatorEntity):
         """Initialize base entity."""
         super().__init__(coordinator)
         self._entry = entry
+        self._rules = get_entity_rules(entry)
         self._attr_device_info = get_device_info(entry)

@@ -41,6 +41,15 @@ from .protocol import AMiTClient
 _LOGGER = logging.getLogger(__name__)
 
 
+def _get_writable_wids(variables: list[dict], selected: list[str]) -> set[str]:
+    """Allow writes only to selected, currently writable scalar variables."""
+    selected_wids = {str(wid) for wid in selected}
+    return {
+        str(v["wid"]) for v in variables
+        if str(v["wid"]) in selected_wids and v.get("writable", False)
+    }
+
+
 async def validate_connection(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input allows us to connect."""
     _LOGGER.info(f"Validating connection to {data[CONF_HOST]}:{data.get(CONF_PORT, DEFAULT_PORT)}")
@@ -100,7 +109,7 @@ async def validate_connection(hass: HomeAssistant, data: dict[str, Any]) -> dict
         "title": f"AMiT PLC ({data[CONF_HOST]})",
         "variable_count": len(variables),
         "variables": [
-            {"name": v.name, "wid": v.wid, "type": v.type_name}
+            {"name": v.name, "wid": v.wid, "type": v.type_name, "writable": v.writable}
             for v in variables if v.is_readable()
         ]
     }
@@ -261,6 +270,8 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 
                 # All variables to monitor (both monitored and writable)
                 all_selected = list(set(monitored_wids + writable_wids))
+                allowed_wids = _get_writable_wids(self._variables, all_selected)
+                writable_wids = [wid for wid in writable_wids if wid in allowed_wids]
                 
                 self._data[CONF_VARIABLES] = all_selected
                 self._data[CONF_WRITABLE_VARIABLES] = writable_wids
@@ -444,20 +455,18 @@ class AMiTConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle writable variable selection step - select variables to control."""
+        allowed_wids = _get_writable_wids(self._variables, self._data.get(CONF_VARIABLES, []))
         if user_input is not None:
             writable = user_input.get("writable_variables", [])
-            self._data[CONF_WRITABLE_VARIABLES] = writable
+            self._data[CONF_WRITABLE_VARIABLES] = [wid for wid in writable if wid in allowed_wids]
             
             return self.async_create_entry(
                 title=f"AMiT PLC ({self._data[CONF_HOST]})",
                 data=self._data,
             )
 
-        # Only show variables that were selected for monitoring
-        selected_wids = set(self._data.get(CONF_VARIABLES, []))
-        
-        # Filter to only selected variables
-        selected_vars = [v for v in self._variables if str(v["wid"]) in selected_wids]
+        # Show only selected variables that the current profile allows writing.
+        selected_vars = [v for v in self._variables if str(v["wid"]) in allowed_wids]
         
         options = [
             selector.SelectOptionDict(
@@ -549,7 +558,7 @@ class AMiTOptionsFlow(config_entries.OptionsFlow):
                     await client.disconnect()
                 
                 self._variables = [
-                    {"name": v.name, "wid": v.wid, "type": v.type_name}
+                    {"name": v.name, "wid": v.wid, "type": v.type_name, "writable": v.writable}
                     for v in variables if v.is_readable()
                 ]
                 _LOGGER.info(f"Options flow loaded {len(self._variables)} variables")
@@ -619,13 +628,14 @@ class AMiTOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle writable variable selection."""
+        allowed_wids = _get_writable_wids(self._variables, self._selected_variables)
         if user_input is not None:
             writable = user_input.get("writable_variables", [])
             
             # Update config entry
             new_data = dict(self.config_entry.data)
             new_data[CONF_VARIABLES] = self._selected_variables
-            new_data[CONF_WRITABLE_VARIABLES] = writable
+            new_data[CONF_WRITABLE_VARIABLES] = [wid for wid in writable if wid in allowed_wids]
             new_data[CONF_SCAN_INTERVAL] = self._scan_interval
             
             self.hass.config_entries.async_update_entry(
@@ -637,9 +647,8 @@ class AMiTOptionsFlow(config_entries.OptionsFlow):
             
             return self.async_create_entry(title="", data={})
 
-        # Only show selected variables
-        selected_wids = set(self._selected_variables)
-        selected_vars = [v for v in self._variables if str(v["wid"]) in selected_wids]
+        # Show only selected variables that the current profile allows writing.
+        selected_vars = [v for v in self._variables if str(v["wid"]) in allowed_wids]
         
         options = [
             selector.SelectOptionDict(
@@ -652,7 +661,7 @@ class AMiTOptionsFlow(config_entries.OptionsFlow):
         # Current writable selection
         current_writable = [
             str(wid) for wid in self.config_entry.data.get(CONF_WRITABLE_VARIABLES, [])
-            if str(wid) in selected_wids  # Only keep if still selected
+            if str(wid) in allowed_wids
         ]
 
         return self.async_show_form(

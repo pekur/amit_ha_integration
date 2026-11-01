@@ -87,6 +87,10 @@ The integration creates entities based on variable naming patterns and the writa
 
 Variables that match a **read-only prefix** (`TE*`, `Por*`, `ALARM*`, `Stav*`, `status*`, `CO2_*`, etc.) are automatically locked as read-only by the Biosuntec profile regardless of the writable selection.
 
+The **Generic** profile creates plain numeric sensors and number controls, without Biosuntec naming rules, temperature units, switches, or binary sensors. Existing Generic entities previously classified as switches or binary sensors will be replaced by number or sensor entities; update automations using those entity IDs. Biosuntec and configurations without a profile retain their existing classification and identifier formats.
+
+Read-only variables are excluded from the writable selection. Older selections and imported backups cannot override the current profile's read-only policy; those variables remain monitored.
+
 ## Device Buttons
 
 Each AMiT PLC device has two built-in buttons:
@@ -132,7 +136,7 @@ The export includes:
 
 ### `amit.write_variable`
 
-Write a value to any PLC variable.
+Write a value to a monitored PLC variable selected for writing in the integration configuration. The target profile's read-only policy also applies. With multiple PLCs, include the config entry ID in `entry_id`.
 
 ```yaml
 # By WID (variable index)

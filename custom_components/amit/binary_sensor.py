@@ -12,8 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .entity import AMiTEntity
-from .biosuntec.heuristics import is_binary_state, get_binary_sensor_device_class
+from .entity import AMiTEntity, get_entity_rules
 from .protocol import Variable, VarType
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,6 +28,7 @@ async def async_setup_entry(
     coordinator = data["coordinator"]
     variables = data["variables"]
     writable_wids = data["writable_wids"]
+    rules = get_entity_rules(entry)
     
     entities = []
     
@@ -36,8 +36,8 @@ async def async_setup_entry(
         # Create binary sensor only if:
         # 1. Variable is NOT in writable_wids
         # 2. Variable is INT16 with binary state name
-        if variable.wid not in writable_wids:
-            if variable.var_type == VarType.INT16 and is_binary_state(variable.name):
+        if not variable.writable or variable.wid not in writable_wids:
+            if variable.var_type == VarType.INT16 and rules and rules.is_binary_state(variable.name):
                 entities.append(AMiTBinarySensor(coordinator, variable, entry))
     
     async_add_entities(entities)
@@ -59,7 +59,9 @@ class AMiTBinarySensor(AMiTEntity, BinarySensorEntity):
         self._attr_name = variable.name
 
         # Determine device class
-        self._attr_device_class = get_binary_sensor_device_class(variable.name)
+        self._attr_device_class = (
+            self._rules.get_binary_sensor_device_class(variable.name) if self._rules else None
+        )
 
     @property
     def is_on(self) -> bool | None:
