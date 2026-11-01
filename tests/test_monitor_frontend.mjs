@@ -19,6 +19,36 @@ const snapshot = (variables = [variable()], sequence = 0, samples = [], runtime 
 });
 const send = (model, sample, runtime = "first") => model.sample({ runtime_id: runtime, sample });
 
+test("per-variable intervals update without changing samples or graph history", () => {
+  const model = new MonitorHistory();
+  model.snapshot({ ...snapshot([variable(1), variable(2)]), intervals: { "1": 2.5, "2": 120 } });
+  model.select(1, true);
+  send(model, reading(1));
+  const before = JSON.stringify([...model.selected]);
+  assert.equal(model.readingInterval(1), 2.5);
+  assert.equal(model.readingInterval(2), 120);
+  model.updateIntervals({ runtime_id: "first", intervals: { "1": 10, "2": 60 } });
+  assert.equal(model.readingInterval(1), 10);
+  assert.equal(model.readingInterval(2), 60);
+  assert.equal(JSON.stringify([...model.selected]), before);
+  assert.equal(model.latest.get(1).value, 1);
+  assert.equal(model.count, 1);
+});
+
+test("interval metadata rejects another runtime and falls back for missing or invalid WIDs", () => {
+  const model = new MonitorHistory();
+  model.snapshot({ ...snapshot([variable(1), variable(2)]), intervals: { 1: 1, 2: 120 } });
+  model.updateIntervals({ runtime_id: "other", intervals: { 1: 99 } });
+  assert.equal(model.readingInterval(1), 1);
+  model.updateIntervals({ runtime_id: "first", intervals: { 1: -1, 2: "5", 999: 1 } });
+  assert.equal(model.readingInterval(1), 30);
+  assert.equal(model.readingInterval(2), 30);
+  assert.equal(model.intervals.has(999), false);
+  model.snapshot(snapshot());
+  assert.equal(model.readingInterval(1), 30);
+  assert.equal(model.intervals.size, 0);
+});
+
 test("snapshot values never become recorded history", () => {
   const model = new MonitorHistory();
   model.snapshot(snapshot(undefined, 5, [reading(5)]));

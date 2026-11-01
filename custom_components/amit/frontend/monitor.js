@@ -21,6 +21,12 @@ export const TRANSLATIONS = {
     haFilter: "Home Assistant entities", allVariables: "All variables", withEntity: "With HA entity",
     disabledEntity: "Disabled", configuredOnly: "Selected in HA configuration · no entity",
     plcVariable: "PLC variable",
+    readInterval: "Reading interval (s)", intervalScope: "Apply interval to",
+    intervalAll: "All readable variables", intervalSelected: "Selected variables only",
+    intervalApply: "Apply", intervalReset: "Use device interval", intervalDevice: "Device interval",
+    intervalRequested: "Requested interval", intervalActive: "Applied", intervalPending: "Inactive",
+    intervalInvalid: "Enter a number from 1 to 120 seconds.", intervalFailed: "Unable to apply the interval. Try again or use the device interval.",
+    intervalHelp: "Temporary for this panel. Selected means all variables checked for graphs, including filtered or paginated rows. Other variables use the device interval. Shared HA readings or another panel can update values faster; slow replies and large catalogs can delay them. Closing this panel releases its request.",
     addEntities: "Add selected as HA entities", addTitle: "Add variables to Home Assistant",
     addScope: "All selected variables are included, including those hidden by filters or on other pages.",
     addPreviewing: "Preparing preview…", addConfirm: "Save and load entities", cancel: "Cancel", close: "Close",
@@ -62,6 +68,12 @@ export const TRANSLATIONS = {
     haFilter: "Entity Home Assistantu", allVariables: "Všechny proměnné", withEntity: "S HA entitou",
     disabledEntity: "Zakázaná", configuredOnly: "Vybraná v konfiguraci HA · bez entity",
     plcVariable: "Proměnná PLC",
+    readInterval: "Interval čtení (s)", intervalScope: "Použít interval pro",
+    intervalAll: "Všechny čitelné proměnné", intervalSelected: "Jen vybrané proměnné",
+    intervalApply: "Použít", intervalReset: "Použít interval zařízení", intervalDevice: "Interval zařízení",
+    intervalRequested: "Požadovaný interval", intervalActive: "Použito", intervalPending: "Neaktivní",
+    intervalInvalid: "Zadejte číslo od 1 do 120 sekund.", intervalFailed: "Interval se nepodařilo použít. Zkuste to znovu nebo použijte interval zařízení.",
+    intervalHelp: "Dočasně pro tento panel. Výběr zahrnuje všechny proměnné zaškrtnuté pro grafy, i skryté filtrem nebo na jiné stránce. Ostatní používají interval zařízení. Sdílené odečty HA nebo jiný panel mohou hodnoty obnovovat rychleji; pomalé odpovědi a velký katalog je mohou zpozdit. Zavřením panelu se jeho požadavek zruší.",
     addEntities: "Přidat vybrané jako HA entity", addTitle: "Přidat proměnné do Home Assistantu",
     addScope: "Zahrnuty jsou všechny vybrané proměnné, i ty skryté filtrem nebo na jiné stránce.",
     addPreviewing: "Připravuji náhled…", addConfirm: "Uložit a načíst entity", cancel: "Zrušit", close: "Zavřít",
@@ -105,6 +117,7 @@ export class MonitorHistory {
     this.sequence = 0;
     this.count = 0;
     this.interval = 30;
+    this.intervals = new Map();
     this.trimmed = false;
   }
 
@@ -131,6 +144,8 @@ export class MonitorHistory {
       if (catalog.get(wid)?.revision !== value.revision) this.latest.delete(wid);
     }
     this.catalog = catalog;
+    this.intervals.clear();
+    this.updateIntervals(event);
     this.sequence = Math.max(this.sequence, event.sequence || 0);
     for (const sample of event.samples || []) this._latest(sample);
     // A snapshot can contain readings missed during a pause. They update the
@@ -146,6 +161,18 @@ export class MonitorHistory {
       const variable = this.catalog.get(patch.wid);
       if (variable) this.catalog.set(patch.wid, { ...variable, ...entityFields(patch) });
     }
+  }
+
+  updateIntervals(event) {
+    if (event.runtime_id !== this.runtime || !event.intervals || typeof event.intervals !== "object") return;
+    this.intervals = new Map([...this.catalog.keys()].map(wid => {
+      const value = event.intervals[wid];
+      return [wid, Number.isFinite(value) && value > 0 ? value : this.interval];
+    }));
+  }
+
+  readingInterval(wid) {
+    return this.intervals.get(wid) ?? this.interval;
   }
 
   _latest(sample) {
@@ -222,6 +249,7 @@ button,input,select{font:inherit;color:inherit}button,select,input[type=search]{
 table{width:100%;border-collapse:collapse}th{text-align:left;font-size:12px;font-weight:400;color:var(--secondary-text-color,#526775);background:var(--primary-background-color,#f5f7fa);padding:9px 10px}td{border-top:1px solid var(--divider-color,#dce4eb);padding:12px 10px;vertical-align:middle}td:first-child,th:first-child{width:42px;padding:0}td:first-child label{display:flex;align-items:center;justify-content:center;min-height:44px;min-width:42px}td:last-child,th:last-child{text-align:right}.name{display:block;overflow-wrap:anywhere;font-weight:500}.value{white-space:nowrap}input[type=checkbox]{width:18px;height:18px;accent-color:var(--primary-color,#007eaa)}tr.selected{background:color-mix(in srgb,var(--primary-color,#007eaa) 9%,var(--card-background-color,#fff))}.error{color:var(--error-color,#a12836)}.changed .value{animation:changed 1s ease-out}@keyframes changed{from{background:color-mix(in srgb,var(--primary-color,#007eaa) 25%,transparent)}to{background:transparent}}
 .foot{padding:12px 16px;border-top:1px solid var(--divider-color,#dce4eb);color:var(--secondary-text-color,#526775);font-size:12px}.plots{padding:0 16px 12px}.chart{border-top:1px solid var(--divider-color,#dce4eb);padding-top:14px;margin-bottom:16px}.chart-head{justify-content:space-between}.chart-name{display:flex;align-items:center;gap:7px;min-width:0;overflow-wrap:anywhere}.swatch{width:18px;height:3px;background:var(--series);flex-shrink:0}.chart svg{display:block;width:100%;height:190px;touch-action:pan-y}.chart svg text{fill:var(--secondary-text-color,#526775);font:12px system-ui,sans-serif}.chart-detail{min-height:36px;font-size:12px;color:var(--secondary-text-color,#526775);overflow-wrap:anywhere}.sample-control{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--secondary-text-color,#526775)}.sample-control input{min-width:0;flex:1;accent-color:var(--primary-color,#007eaa)}.empty{padding:24px 16px;color:var(--secondary-text-color,#526775);text-align:center}.notice{padding:0 20px 20px;font-size:12px;color:var(--secondary-text-color,#526775)}.status{display:flex;align-items:center;gap:6px}.status-dot{width:8px;height:8px;border-radius:50%;background:var(--primary-color,#007eaa)}.status[data-offline=true] .status-dot{background:var(--disabled-text-color,#888)}.limit{padding:0 16px 12px;font-size:12px;color:var(--secondary-text-color,#526775)}[hidden]{display:none!important}
 .identity,.entity-info{display:block;overflow-wrap:anywhere}.chart-name{flex:1}
+.interval-settings{margin:16px 20px 0;padding:14px 16px;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#dce4eb);border-radius:12px}.interval-controls{display:flex;align-items:end;flex-wrap:wrap;gap:12px}.interval-controls label{display:flex;flex-direction:column;gap:4px}.interval-controls input{width:130px;border:1px solid var(--divider-color,#dce4eb);border-radius:7px;background:var(--card-background-color,#fff);padding:8px 10px}.interval-status{margin-top:10px}.interval-settings .small{margin-top:6px}
 .addition-status{margin:16px 20px 0;padding:14px 16px;border:1px solid var(--divider-color,#dce4eb);border-radius:10px;background:var(--card-background-color,#fff);display:flex;align-items:center;justify-content:space-between;gap:12px;overflow-wrap:anywhere}.primary{background:color-mix(in srgb,var(--primary-color,#007eaa) 18%,var(--card-background-color,#fff));border-color:var(--primary-color,#007eaa);font-weight:500}button.primary:hover{background:color-mix(in srgb,var(--primary-color,#007eaa) 25%,var(--card-background-color,#fff))}
 dialog{color:inherit;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#dce4eb);border-radius:14px;padding:20px;width:min(640px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;box-shadow:0 16px 64px #0005}dialog::backdrop{background:#0007}dialog h2{font-size:20px}dialog .dialog-body{display:grid;gap:12px;margin:12px 0}dialog .dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}.addition-list{max-height:30vh;overflow:auto;border:1px solid var(--divider-color,#dce4eb);border-radius:8px}.addition-item{padding:9px 12px;overflow-wrap:anywhere}.addition-item+.addition-item{border-top:1px solid var(--divider-color,#dce4eb)}.addition-warning{padding:10px 12px;background:var(--secondary-background-color,var(--primary-background-color,#eef3f7));border-radius:8px}
 :host([compact]) .columns{grid-template-columns:minmax(0,1fr)}
@@ -254,6 +282,10 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._token = 0;
     this._listToken = 0;
     this._paused = false;
+    this._requestedInterval = null;
+    this._intervalScope = "all";
+    this._intervalError = null;
+    this._intervalDraft = false;
     this._starting = false;
     this._subscriptionFailed = false;
     this._unavailable = false;
@@ -327,6 +359,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._listToken++;
     this._loading = false;
     this.model = new MonitorHistory();
+    this._resetInterval();
     this._entryId = null;
     this._entries = [];
     this._paused = false;
@@ -422,7 +455,18 @@ export class AMiTMonitorPanel extends HTMLElement {
       if (token !== this._token || !this.isConnected || this._paused || document.hidden) return;
       if (event.kind === "snapshot" || event.kind === "catalog") {
         this.model.snapshot(event);
+        if (!this._intervalDraft && this._requestedInterval === null) this._intervalInput.value = String(this.model.interval);
         this._checkAddition();
+        if (this._requestedInterval !== null && this._intervalScope === "selected") {
+          const key = JSON.stringify(this._intervalOptions());
+          // A catalog can remove selected WIDs. Replace this subscription after
+          // its acknowledgement without losing the browser's history.
+          if (key !== requestKey) queueMicrotask(() => {
+            if (token === this._token) this._restartInterval();
+          });
+        }
+      } else if (event.kind === "intervals") {
+        this.model.updateIntervals(event);
       } else if (event.kind === "entity_metadata") {
         this.model.entityMetadata(event);
         this._checkAddition();
@@ -441,16 +485,23 @@ export class AMiTMonitorPanel extends HTMLElement {
       }
       this._scheduleRender();
     };
+    const options = this._intervalOptions(), requestKey = JSON.stringify(options);
     this._connection.subscribeMessage(receive,
-      { type: "amit/monitor/subscribe", entry_id: this._entryId }, { resubscribe: false })
+      { type: "amit/monitor/subscribe", entry_id: this._entryId, ...options }, { resubscribe: false })
       .then(unsubscribe => {
         if (token !== this._token || !this.isConnected) this._safeUnsubscribe(unsubscribe);
-        else { this._unsubscribe = unsubscribe; this._starting = false; }
+        else {
+          this._unsubscribe = unsubscribe;
+          this._starting = false;
+          if (this._intervalError === "intervalFailed") this._intervalError = null;
+          this._scheduleRender();
+        }
       })
       .catch(error => {
         if (token !== this._token) return;
         this._starting = false;
         this._subscriptionFailed = true;
+        if (this._requestedInterval !== null) this._intervalError = "intervalFailed";
         this._error = error?.code === "unauthorized" ? "admin" : "error";
         if (error?.code === "not_found") { this._unavailable = true; this._loadEntries(); }
         this._scheduleRender();
@@ -459,6 +510,30 @@ export class AMiTMonitorPanel extends HTMLElement {
 
   _t(key) { return TRANSLATIONS[this._lang][key]; }
 
+  _intervalOptions() {
+    if (this._requestedInterval === null) return {};
+    return { interval: this._requestedInterval, ...(this._intervalScope === "selected" ?
+      { wids: [...this.model.selected.keys()].sort((a, b) => a - b) } : {}) };
+  }
+
+  _resetInterval() {
+    this._requestedInterval = null;
+    this._intervalScope = "all";
+    this._intervalError = null;
+    this._intervalDraft = false;
+    if (this._intervalInput) this._intervalInput.value = String(this.model.interval);
+    this._intervalInput?.removeAttribute("aria-invalid");
+    if (this._scopeInput) this._scopeInput.value = "all";
+  }
+
+  _restartInterval() {
+    this._subscriptionFailed = false;
+    this._error = null;
+    this._stopSubscription();
+    this._sync();
+    this._scheduleRender();
+  }
+
   _mount() {
     this.shadowRoot.innerHTML = `<style>${STYLE}</style>
       <header><div class="heading"><button class="menu" type="button" data-label="menu"><ha-icon icon="mdi:menu"></ha-icon></button><h1>AMiT Monitor</h1></div>
@@ -466,6 +541,11 @@ export class AMiTMonitorPanel extends HTMLElement {
       <span class="status" role="status"><span class="status-dot"></span><span class="status-text"></span></span>
       <button type="button" class="refresh" data-label="refresh"><ha-icon icon="mdi:refresh"></ha-icon></button>
       <span class="last-read muted small"></span></div></header>
+      <section class="interval-settings" data-label="readInterval"><form class="interval-controls" novalidate>
+      <label><span data-text="readInterval"></span><input class="read-interval" type="number" min="1" max="120" step="any" required data-label="readInterval" aria-describedby="interval-help interval-error"></label>
+      <label><span data-text="intervalScope"></span><select class="interval-scope" data-label="intervalScope"><option value="all" data-text="intervalAll"></option><option value="selected" data-text="intervalSelected"></option></select></label>
+      <button type="submit" class="interval-apply" data-text="intervalApply"></button><button type="button" class="interval-reset" data-text="intervalReset"></button></form>
+      <p class="interval-status number" role="status" aria-live="polite"></p><p id="interval-error" class="interval-error error" role="alert" hidden></p><p id="interval-help" class="small muted" data-text="intervalHelp"></p></section>
       <div class="addition-status" hidden><span role="status" aria-live="polite"></span><button type="button" class="addition-details" data-text="addDetails"></button></div>
       <div class="columns"><section class="section"><div class="section-head"><h2 data-text="variables"></h2><span class="count muted small"></span></div>
       <div class="tools"><input type="search" data-label="search"><select class="filter" data-label="type"></select><select class="ha-filter" data-label="haFilter"></select></div>
@@ -481,6 +561,28 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._filter = find(".filter");
     this._haSelect = find(".ha-filter");
     this._plcs = find(".plcs");
+    this._intervalInput = find(".read-interval");
+    this._scopeInput = find(".interval-scope");
+    this._intervalInput.oninput = () => { this._intervalDraft = true; };
+    find(".interval-controls").onsubmit = event => {
+      event.preventDefault();
+      const interval = this._intervalInput.valueAsNumber;
+      if (!this._intervalInput.checkValidity() || !Number.isFinite(interval) || interval < 1 || interval > 120) {
+        this._intervalError = "intervalInvalid";
+        this._intervalInput.setAttribute("aria-invalid", "true");
+        this._scheduleRender();
+        return;
+      }
+      this._intervalInput.removeAttribute("aria-invalid");
+      this._intervalError = null;
+      this._requestedInterval = interval;
+      this._intervalScope = this._scopeInput.value;
+      this._restartInterval();
+    };
+    find(".interval-reset").onclick = () => {
+      this._resetInterval();
+      this._restartInterval();
+    };
     this._tbody = find("tbody");
     this._plots = find(".plots");
     this._additionDialog = find(".addition-dialog");
@@ -503,6 +605,7 @@ export class AMiTMonitorPanel extends HTMLElement {
       this._stopSubscription();
       this._entryId = this._plcs.value || null;
       this.model = new MonitorHistory();
+      this._resetInterval();
       this._paused = this._subscriptionFailed = this._unavailable = false;
       this._error = null;
       this._tablePage = this._chartPage = 0;
@@ -607,6 +710,15 @@ export class AMiTMonitorPanel extends HTMLElement {
     pause.disabled = !this._entryId;
     find(".selection").textContent = `${this._t("selected")} ${this.model.selected.size}`;
     find(".limit").hidden = !this.model.trimmed;
+    const custom = this._requestedInterval !== null;
+    const scope = this._t(this._intervalScope === "selected" ? "intervalSelected" : "intervalAll");
+    const applied = this._unsubscribe && !this._starting && !this._subscriptionFailed;
+    find(".interval-status").textContent = `${this._t("intervalDevice")}: ${this._format(this.model.interval)} s` +
+      (custom ? ` · ${this._t("intervalRequested")}: ${this._format(this._requestedInterval)} s · ${scope}${this._intervalScope === "selected" ? ` (${this.model.selected.size})` : ""} · ${this._t(applied ? "intervalActive" : "intervalPending")}` : "");
+    find(".interval-error").textContent = this._intervalError ? this._t(this._intervalError) : "";
+    find(".interval-error").hidden = !this._intervalError;
+    find(".interval-apply").disabled = !this._entryId || this._unavailable;
+    find(".interval-reset").disabled = !this._entryId;
     this._renderRows();
     this._renderCharts();
     this._renderAddition();
@@ -832,7 +944,12 @@ export class AMiTMonitorPanel extends HTMLElement {
       if (!entry) {
         const row = node("tr"), checkCell = node("td"), label = node("label"), checkbox = node("input");
         checkbox.type = "checkbox";
-        checkbox.onchange = () => { this.model.select(variable.wid, checkbox.checked); this._checkAddition(); this._scheduleRender(); };
+        checkbox.onchange = () => {
+          this.model.select(variable.wid, checkbox.checked);
+          this._checkAddition();
+          if (this._requestedInterval !== null && this._intervalScope === "selected") this._restartInterval();
+          this._scheduleRender();
+        };
         label.append(checkbox); checkCell.append(label);
         const nameCell = node("td"), name = node("span", "name"), metadata = node("span", "identity small muted"), entities = node("div", "entity-info small muted");
         nameCell.append(name, metadata, entities);
@@ -854,7 +971,7 @@ export class AMiTMonitorPanel extends HTMLElement {
       const sample = this.model.latest.get(variable.wid);
       const status = !variable.readable ? "unsupported" : sample?.status || "waiting";
       entry.value.textContent = status === "ok" ? `${this._format(sample.value)} ${variable.unit || ""}` : "—";
-      const stale = sample && Date.now() - Date.parse(sample.timestamp) > this.model.interval * 2000;
+      const stale = sample && Date.now() - Date.parse(sample.timestamp) > this.model.readingInterval(variable.wid) * 2000;
       entry.reading.textContent = status === "ok" ? `${this._time(sample.timestamp)} · ${this._age(sample.timestamp)}${stale ? " · " + this._t("stale") : ""}` : this._t(status);
       entry.reading.className = `small ${status === "read_error" || status === "invalid" ? "error" : "muted"}`;
       entry.last.textContent = sample?.status !== "ok" && Number.isFinite(sample?.last_value) ?

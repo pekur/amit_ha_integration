@@ -36,16 +36,18 @@ async function mount(browser, options = {}) {
       sequence: 10, variables, entityMetadata: new Map(), active: new Map(), pending: [], nextId: 1, calls: 0,
       entries: [{ entry_id: "first", title: "Vytápění · Biosuntec" }, { entry_id: "second", title: "Vzduchotechnika · Generic" }],
       listeners: new Map(), deferSubscription: Boolean(options.deferSubscription),
-      messages: [], additionStatus: "pending", runtimeSuffix: "", deferPreview: false, deferConfirm: false,
+      messages: [], subscriptionMessages: [], additionStatus: "pending", runtimeSuffix: "", deferPreview: false, deferConfirm: false,
     };
     fixture.reading = (wid, value, status = "ok") => ({
       wid, value, status, sequence: ++fixture.sequence,
       revision: fixture.variables.find(v => v.wid === wid)?.revision,
       timestamp: new Date(Date.now() - 60000 + fixture.sequence * 1000).toISOString(),
     });
-    fixture.snapshot = entry => ({ kind: "snapshot", runtime_id: `runtime-${entry}${fixture.runtimeSuffix}`, sequence: fixture.sequence,
+    fixture.snapshot = (entry, options = {}) => ({ kind: "snapshot", runtime_id: `runtime-${entry}${fixture.runtimeSuffix}`, sequence: fixture.sequence,
       variables: fixture.variables.map(v => ({ ...v, configured: false, entities: [], ...fixture.entityMetadata.get(entry)?.get(v.wid) })), scan_interval: 30,
       samples: [{ ...fixture.reading(4101, 22.4), sequence: fixture.sequence }],
+      intervals: Object.fromEntries(fixture.variables.filter(v => v.readable).map(v => [v.wid,
+        options.interval && (!options.wids || options.wids.includes(v.wid)) ? options.interval : 30])),
     });
     fixture.connection = {
       connected: true,
@@ -79,10 +81,12 @@ async function mount(browser, options = {}) {
         assertType(message.type, "amit/monitor/subscribe");
         if (opts.resubscribe !== false) throw Error("Duplicate reconnect ownership");
         fixture.calls++;
+        fixture.subscriptionMessages.push(structuredClone(message));
+        if (fixture.subscriptionError) return Promise.reject(fixture.subscriptionError);
         const id = fixture.nextId++;
         fixture.active.set(id, { callback, entry: message.entry_id });
         fixture.oldCallback = callback;
-        callback(fixture.snapshot(message.entry_id));
+        callback(fixture.snapshot(message.entry_id, message));
         const unsubscribe = () => { fixture.active.delete(id); };
         return fixture.deferSubscription ? new Promise(resolve => fixture.pending.push(() => resolve(unsubscribe))) : Promise.resolve(unsubscribe);
       },
@@ -124,6 +128,151 @@ async function run() {
   const browser = await chromium.launch({ headless: true, ...(process.env.AMIT_CHROME_PATH ? { executablePath: process.env.AMIT_CHROME_PATH } : {}) });
   const results = [];
   try {
+    {
+      const { page, errors, requests } = await mount(browser);
+      const input = page.getByRole("spinbutton", { name: "Interval čtení (s)", exact: true });
+      const apply = page.getByRole("button", { name: "Použít", exact: true });
+      const reset = page.getByRole("button", { name: "Použít interval zařízení", exact: true });
+      const scope = page.getByRole("combobox", { name: "Použít interval pro", exact: true });
+      await select(page, "TE_obyvak");
+      await page.evaluate(() => fixture.emit(fixture.reading(4101, 23)));
+      const count = await page.evaluate(() => panel.model.count);
+      const calls = await page.evaluate(() => fixture.calls);
+      for (const value of ["", "0", "120.1"]) {
+        await input.fill(value);
+        await apply.click();
+        await page.getByRole("alert").filter({ hasText: "Zadejte číslo" }).waitFor();
+        assert.equal(await page.evaluate(() => fixture.calls), calls);
+      }
+      await input.fill("2.5");
+      await scope.selectOption("selected");
+      await apply.click();
+      await page.waitForFunction(() => !panel._starting && panel._unsubscribe && fixture.subscriptionMessages.at(-1).interval === 2.5);
+      assert.deepEqual(await page.evaluate(() => fixture.subscriptionMessages.at(-1)),
+        { type: "amit/monitor/subscribe", entry_id: "first", interval: 2.5, wids: [4101] });
+      assert.equal(await page.evaluate(() => panel.model.count), count);
+      await select(page, "TE_venkovni");
+      await page.waitForFunction(() => fixture.subscriptionMessages.at(-1).wids?.length === 2 && !panel._starting);
+      await page.getByRole("searchbox").fill("Provozni");
+      await page.waitForTimeout(150);
+      assert.deepEqual(await page.evaluate(() => fixture.subscriptionMessages.at(-1).wids), [4101, 4102]);
+      await page.getByRole("searchbox").fill("");
+      await page.getByRole("checkbox", { name: "Vybráno: TE_obyvak", exact: true }).uncheck();
+      await page.getByRole("checkbox", { name: "Vybráno: TE_venkovni", exact: true }).uncheck();
+      await page.waitForFunction(() => fixture.subscriptionMessages.at(-1).wids?.length === 0 && !panel._starting);
+      await input.fill("120");
+      await scope.selectOption("all");
+      await apply.click();
+      await page.waitForFunction(() => fixture.subscriptionMessages.at(-1).interval === 120 && !panel._starting);
+      assert.equal(await page.evaluate(() => "wids" in fixture.subscriptionMessages.at(-1)), false);
+      await input.fill("17");
+      await page.waitForTimeout(1100);
+      assert.equal(await input.inputValue(), "17", "Rendering must preserve an unapplied draft");
+      await page.getByRole("button", { name: "Pozastavit", exact: true }).click();
+      await page.waitForFunction(() => fixture.active.size === 0);
+      await page.getByRole("button", { name: "Pokračovat", exact: true }).click();
+      await page.waitForFunction(() => fixture.active.size === 1 && !panel._starting);
+      assert.equal(await page.evaluate(() => fixture.subscriptionMessages.at(-1).interval), 120);
+      await page.evaluate(() => fixture.visibility(true));
+      await page.waitForFunction(() => fixture.active.size === 0);
+      await page.evaluate(() => fixture.visibility(false));
+      await page.waitForFunction(() => fixture.active.size === 1 && !panel._starting);
+      await page.evaluate(() => { fixture.connection.connected = false; fixture.event("disconnected"); });
+      await page.waitForFunction(() => fixture.active.size === 0);
+      await page.evaluate(() => { fixture.connection.connected = true; fixture.event("ready"); });
+      await page.waitForFunction(() => fixture.active.size === 1 && !panel._starting);
+      assert.equal(await page.evaluate(() => fixture.subscriptionMessages.at(-1).interval), 120);
+      await reset.click();
+      await page.waitForFunction(() => !panel._starting && !("interval" in fixture.subscriptionMessages.at(-1)));
+      assert.equal(await input.inputValue(), "30");
+      await input.fill("1"); await apply.click();
+      await page.waitForFunction(() => fixture.subscriptionMessages.at(-1).interval === 1 && !panel._starting);
+      await page.getByRole("combobox", { name: "PLC", exact: true }).selectOption("second");
+      await page.waitForFunction(() => fixture.subscriptionMessages.at(-1).entry_id === "second" && !panel._starting);
+      assert.equal(await page.evaluate(() => "interval" in fixture.subscriptionMessages.at(-1)), false);
+      await input.fill("5"); await apply.click();
+      await page.waitForFunction(() => fixture.subscriptionMessages.at(-1).interval === 5 && !panel._starting);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await theme(page, true);
+      await page.waitForTimeout(150);
+      assert.equal(await page.evaluate(() => panel.shadowRoot.querySelector(".interval-settings").scrollWidth <= panel.clientWidth), true);
+      if (process.env.AMIT_SCREENSHOT_DIR) {
+        await fs.mkdir(process.env.AMIT_SCREENSHOT_DIR, { recursive: true });
+        await page.screenshot({ path: path.join(process.env.AMIT_SCREENSHOT_DIR, "interval-mobile-dark.png"), fullPage: true });
+      }
+      await page.evaluate(() => panel.remove());
+      await page.waitForFunction(() => fixture.active.size === 0);
+      await page.evaluate(() => document.body.append(panel));
+      await page.waitForFunction(() => fixture.active.size === 1 && !panel._starting);
+      assert.equal(await page.evaluate(() => "interval" in fixture.subscriptionMessages.at(-1)), false);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("custom numeric intervals, selected and all scope, dynamic selection, history retention, draft retention, pause, hide, reconnect, reset, PLC change and panel close");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser);
+      await page.evaluate(() => { fixture.subscriptionError = { code: "invalid_request" }; });
+      await page.getByRole("spinbutton", { name: "Interval čtení (s)", exact: true }).fill("2");
+      await page.getByRole("button", { name: "Použít", exact: true }).click();
+      await page.getByRole("alert").filter({ hasText: "Interval se nepodařilo" }).waitFor();
+      assert.equal(await page.evaluate(() => fixture.active.size), 0);
+      await page.evaluate(() => { fixture.subscriptionError = null; });
+      await page.evaluate(() => {
+        fixture.connection.connected = false; fixture.event("disconnected");
+        fixture.connection.connected = true; fixture.event("ready");
+      });
+      await page.waitForFunction(() => fixture.active.size === 1 && !panel._starting && panel._intervalError === null);
+      assert.equal(await page.evaluate(() => fixture.subscriptionMessages.at(-1).interval), 2);
+      await page.evaluate(() => { fixture.subscriptionError = { code: "invalid_request" }; });
+      await page.getByRole("spinbutton", { name: "Interval čtení (s)", exact: true }).fill("3");
+      await page.getByRole("spinbutton", { name: "Interval čtení (s)", exact: true }).press("Enter");
+      await page.getByRole("alert").filter({ hasText: "Interval se nepodařilo" }).waitFor();
+      await page.evaluate(() => { fixture.subscriptionError = null; });
+      await page.getByRole("button", { name: "Použít interval zařízení", exact: true }).click();
+      await page.waitForFunction(() => fixture.active.size === 1 && !panel._starting);
+      assert.equal(await page.evaluate(() => panel._intervalError), null);
+      await page.evaluate(() => {
+        for (const active of fixture.active.values()) active.callback({ ...fixture.snapshot(active.entry), scan_interval: 60 });
+      });
+      assert.equal(await page.getByRole("spinbutton", { name: "Interval čtení (s)", exact: true }).inputValue(), "60");
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("rejected interval reports failure; reconnect and device reset recover; Enter submits; device interval populates input");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser);
+      await select(page, "TE_obyvak");
+      await page.getByRole("spinbutton", { name: "Interval čtení (s)", exact: true }).fill("120");
+      await page.getByRole("combobox", { name: "Použít interval pro", exact: true }).selectOption("selected");
+      await page.getByRole("button", { name: "Použít", exact: true }).click();
+      await page.waitForFunction(() => !panel._starting && fixture.subscriptionMessages.at(-1).interval === 120);
+      await page.evaluate(() => fixture.emit({ ...fixture.reading(4101, 24), timestamp: new Date(Date.now() - 90000).toISOString() }));
+      await page.waitForTimeout(150);
+      assert.equal(await page.evaluate(() => panel._rows.get(4101).reading.textContent.includes("Zastaralé")), false);
+      const before = await page.evaluate(() => JSON.stringify([...panel.model.selected]));
+      await page.evaluate(() => {
+        for (const active of fixture.active.values()) active.callback({ kind: "intervals", runtime_id: "runtime-first", intervals: { 4101: 10 } });
+      });
+      await page.waitForFunction(() => panel._rows.get(4101).reading.textContent.includes("Zastaralé"));
+      assert.equal(await page.evaluate(() => JSON.stringify([...panel.model.selected])), before);
+      await page.evaluate(() => {
+        fixture.variables = fixture.variables.filter(v => v.wid !== 4101);
+        for (const active of fixture.active.values()) active.callback({ ...fixture.snapshot(active.entry), kind: "catalog" });
+      });
+      await page.waitForFunction(() => fixture.subscriptionMessages.at(-1).wids?.length === 0 && !panel._starting);
+      assert.equal(await page.evaluate(() => panel.model.selected.size), 0);
+      await page.evaluate(() => { fixture.deferSubscription = true; });
+      await select(page, "TE_venkovni");
+      await page.waitForFunction(() => fixture.pending.length === 1);
+      await page.getByRole("button", { name: "Použít interval zařízení", exact: true }).click();
+      await page.waitForFunction(() => fixture.pending.length === 2);
+      await page.evaluate(() => { for (const resolve of fixture.pending.splice(0)) resolve(); });
+      await page.waitForFunction(() => fixture.active.size === 1 && !panel._starting);
+      assert.equal(await page.evaluate(() => "interval" in fixture.subscriptionMessages.at(-1)), false);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("per-WID staleness, catalog selection removal, and late custom-subscription cleanup after interval reset");
+      await page.close();
+    }
     {
       const { page, errors, requests } = await mount(browser);
       const original = await page.locator("amit-monitor-panel tbody .name").allTextContents();
