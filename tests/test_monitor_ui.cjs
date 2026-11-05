@@ -38,6 +38,9 @@ async function mount(browser, options = {}) {
       listeners: new Map(), deferSubscription: Boolean(options.deferSubscription),
       messages: [], subscriptionMessages: [], additionStatus: "pending", runtimeSuffix: "", deferPreview: false, deferConfirm: false,
     };
+    if (options.matrix) Object.assign(variables[5], {
+      type: "Matrix Integer", matrix_readable: true, rows: 12, cols: 8,
+    });
     fixture.reading = (wid, value, status = "ok") => ({
       wid, value, status, sequence: ++fixture.sequence,
       revision: fixture.variables.find(v => v.wid === wid)?.revision,
@@ -56,6 +59,13 @@ async function mount(browser, options = {}) {
       async sendMessagePromise(message) {
         fixture.messages.push(structuredClone(message));
         if (message.type === "amit/monitor/list") return fixture.entries;
+        if (message.type === "amit/monitor/read_matrix") {
+          if (fixture.deferMatrix) await new Promise(resolve => { fixture.resolveMatrix = resolve; });
+          if (fixture.matrixError) throw fixture.matrixError;
+          return fixture.matrixResult || { ...message, timestamp: new Date().toISOString(),
+            values: Array.from({ length: message.rows }, (_, row) => Array.from({ length: message.cols }, (_, col) =>
+              row === 0 && col === 1 ? null : (message.row + row) * 100 + message.col + col)) };
+        }
         if (message.type === "amit/monitor/preview_add") {
           if (fixture.deferPreview) await new Promise(resolve => { fixture.resolvePreview = resolve; });
           const requested = message.variables.map(v => v.wid);
@@ -136,6 +146,142 @@ async function run() {
   const browser = await chromium.launch({ headless: true, ...(process.env.AMIT_CHROME_PATH ? { executablePath: process.env.AMIT_CHROME_PATH } : {}) });
   const results = [];
   try {
+    {
+      const { page, errors, requests } = await mount(browser, { matrix: true });
+      const dialog = page.locator(".matrix-dialog");
+      assert.equal(await page.evaluate(() => fixture.messages.filter(m => m.type === "amit/monitor/read_matrix").length), 0);
+      await select(page, "TE_obyvak");
+      const history = await page.evaluate(() => JSON.stringify([...panel.model.selected]));
+      await page.getByRole("button", { name: "Otevřít matici", exact: true }).click();
+      await dialog.locator("tbody tr").first().waitFor();
+      assert.equal(await dialog.locator("tbody tr").count(), 10);
+      assert.equal(await dialog.locator("tbody tr").first().locator("td").count(), 6);
+      assert.equal(await dialog.locator("tbody tr").first().locator("td").nth(1).textContent(), "—");
+      assert.match(await dialog.locator(".matrix-status").textContent(), /Poslední odečet/);
+      assert.equal(await page.evaluate(() => JSON.stringify([...panel.model.selected])), history);
+      await page.waitForTimeout(1100);
+      assert.equal(await page.evaluate(() => fixture.messages.filter(m => m.type === "amit/monitor/read_matrix").length), 1);
+      await dialog.getByRole("group", { name: "Řádky", exact: true }).getByRole("button", { name: "Další strana", exact: true }).click();
+      await page.waitForFunction(() => panel._matrix.result?.row === 10);
+      assert.equal(await dialog.locator("tbody tr").count(), 2);
+      await dialog.getByRole("group", { name: "Sloupce", exact: true }).getByRole("button", { name: "Další strana", exact: true }).click();
+      await page.waitForFunction(() => panel._matrix.result?.col === 6);
+      assert.equal(await dialog.locator("tbody tr").first().locator("td").count(), 2);
+      assert.equal(await dialog.locator("tbody tr").first().locator("td").first().textContent(), "1 006");
+      await page.evaluate(() => { fixture.matrixError = { code: "busy" }; });
+      await dialog.getByRole("button", { name: "Obnovit výřez", exact: true }).click();
+      await page.waitForFunction(() => panel._matrix.error === "matrixBusy");
+      assert.equal(await dialog.locator("tbody tr").count(), 0);
+      await page.evaluate(() => { fixture.matrixError = null; });
+      await dialog.getByRole("button", { name: "Obnovit výřez", exact: true }).click();
+      await page.waitForFunction(() => Boolean(panel._matrix.result));
+      await dialog.getByRole("group", { name: "Řádky", exact: true }).getByRole("button", { name: "Předchozí strana", exact: true }).click();
+      await page.waitForFunction(() => panel._matrix.result?.row === 0);
+      await dialog.getByRole("group", { name: "Sloupce", exact: true }).getByRole("button", { name: "Předchozí strana", exact: true }).click();
+      await page.waitForFunction(() => panel._matrix.result?.col === 0);
+      for (const dark of [false, true]) {
+        await theme(page, dark);
+        for (const width of [1024, 390, 320]) {
+          await page.setViewportSize({ width, height: 844 });
+          await page.waitForTimeout(150);
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+          assert.equal(await dialog.evaluate(element => element.getBoundingClientRect().width <= innerWidth), true);
+          if (process.env.AMIT_SCREENSHOT_DIR && width === 390) await page.screenshot({
+            path: path.join(process.env.AMIT_SCREENSHOT_DIR, `matrix-mobile-${dark ? "dark" : "light"}.png`), fullPage: true,
+          });
+        }
+      }
+      await page.evaluate(() => { panel.hass = { ...panel._hass, language: "en" }; });
+      await dialog.getByRole("button", { name: "Refresh window", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => panel._matrix === null);
+      await page.getByRole("combobox", { name: "Variable type", exact: true }).selectOption("Matrix Integer");
+      await page.waitForFunction(() => panel.shadowRoot.querySelectorAll(".columns tbody tr").length === 1);
+      assert.equal(await page.locator(".columns tbody tr").count(), 1);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("matrix bounded windows, row/column pages, manual refresh, busy retry, null cells, scalar history, languages and mobile themes");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser, { matrix: true });
+      const dialog = page.locator(".matrix-dialog");
+      await page.evaluate(() => { fixture.deferMatrix = true; });
+      await page.getByRole("button", { name: "Otevřít matici", exact: true }).click();
+      await page.waitForFunction(() => Boolean(fixture.resolveMatrix));
+      await page.evaluate(() => {
+        fixture.oldMatrix = fixture.resolveMatrix;
+        fixture.variables[5].revision++;
+        for (const active of fixture.active.values()) active.callback({ ...fixture.snapshot(active.entry), kind: "catalog" });
+      });
+      await page.waitForFunction(() => panel._matrix.stale);
+      await page.evaluate(() => fixture.oldMatrix());
+      await page.waitForTimeout(150);
+      assert.equal(await page.evaluate(() => panel._matrix.result), null);
+      assert.equal(await dialog.getByRole("button", { name: "Obnovit výřez", exact: true }).isDisabled(), true);
+      await dialog.getByRole("button", { name: "Zavřít", exact: true }).click();
+      await page.evaluate(() => { fixture.deferMatrix = false; fixture.matrixError = { code: "read_error" }; });
+      await page.getByRole("button", { name: "Otevřít matici", exact: true }).click();
+      await page.waitForFunction(() => panel._matrix.error === "matrixError");
+      await page.evaluate(() => { fixture.matrixError = null; fixture.deferMatrix = true; });
+      await dialog.getByRole("button", { name: "Obnovit výřez", exact: true }).click();
+      await page.waitForFunction(() => panel._matrix.loading);
+      await page.evaluate(() => {
+        fixture.oldMatrix = fixture.resolveMatrix;
+        panel._plcs.value = "second"; panel._plcs.dispatchEvent(new Event("change"));
+      });
+      await page.waitForFunction(() => panel.model.runtime === "runtime-second");
+      await page.evaluate(() => fixture.oldMatrix());
+      assert.equal(await page.evaluate(() => panel._matrix), null);
+      assert.equal(await dialog.evaluate(element => element.open), false);
+      await page.evaluate(() => { fixture.deferMatrix = false; });
+      await page.getByRole("button", { name: "Otevřít matici", exact: true }).click();
+      await page.waitForFunction(() => Boolean(panel._matrix.result));
+      await page.evaluate(() => { fixture.connection.connected = false; fixture.event("disconnected"); });
+      assert.equal(await page.evaluate(() => panel._matrix), null);
+      assert.equal(await dialog.evaluate(element => element.open), false);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("matrix catalog invalidation, read errors, late replies after PLC change and disconnect cleanup");
+      await page.close();
+    }
+    {
+      const { page, errors, requests } = await mount(browser, { matrix: true });
+      const dialog = page.locator(".matrix-dialog");
+      await page.evaluate(() => { fixture.deferMatrix = true; });
+      await page.getByRole("button", { name: "Otevřít matici", exact: true }).click();
+      await page.waitForFunction(() => Boolean(fixture.resolveMatrix));
+      await page.evaluate(() => { fixture.oldMatrix = fixture.resolveMatrix; });
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => panel._matrix === null);
+      await page.evaluate(() => {
+        fixture.deferMatrix = false;
+        fixture.variables[5].name = '<img src="invalid" onerror="window.injected=true">';
+        for (const active of fixture.active.values()) active.callback({ ...fixture.snapshot(active.entry), kind: "catalog" });
+      });
+      await page.getByRole("button", { name: "Otevřít matici", exact: true }).click();
+      await page.waitForFunction(() => Boolean(panel._matrix.result));
+      assert.equal(await dialog.locator("h2").textContent(), '<img src="invalid" onerror="window.injected=true">');
+      const current = await page.evaluate(() => JSON.stringify(panel._matrix.result));
+      await page.evaluate(() => {
+        fixture.matrixResult = { ...panel._matrix.result, values: panel._matrix.result.values.map(row => row.map(() => 9999)) };
+        fixture.oldMatrix();
+      });
+      await page.waitForTimeout(150);
+      assert.equal(await page.evaluate(() => JSON.stringify(panel._matrix.result)), current);
+      await page.evaluate(() => { fixture.matrixResult = { values: [] }; });
+      await dialog.getByRole("button", { name: "Obnovit výřez", exact: true }).click();
+      await page.waitForFunction(() => panel._matrix.error === "matrixError");
+      assert.equal(await dialog.locator("tbody tr").count(), 0);
+      await page.evaluate(() => fixture.visibility(true));
+      assert.equal(await page.evaluate(() => panel._matrix), null);
+      const count = await page.evaluate(() => fixture.messages.filter(m => m.type === "amit/monitor/read_matrix").length);
+      await page.evaluate(() => fixture.visibility(false));
+      await page.waitForTimeout(150);
+      assert.equal(await page.evaluate(() => fixture.messages.filter(m => m.type === "amit/monitor/read_matrix").length), count);
+      assert.equal(await page.evaluate(() => window.injected), undefined);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("matrix late close/reopen replies, safe text names, malformed response rejection and hidden-page cleanup without automatic reads");
+      await page.close();
+    }
     for (const suspension of ["hidden", "paused", "disconnected"]) {
       const { page, errors, requests } = await mount(browser);
       await select(page, "TE_obyvak");

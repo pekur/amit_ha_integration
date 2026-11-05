@@ -46,6 +46,11 @@ export const TRANSLATIONS = {
     addStatusError: "Unable to check the saved change. The status will be checked again when the connection is available.",
     addRetry: "Prepare new preview", addDetails: "View details",
     addPreviewReady: "Check the preview before saving the selection.",
+    matrixOpen: "Open matrix", matrixRefresh: "Refresh window", matrixRows: "Rows", matrixCols: "Columns",
+    matrixHelp: "Read-only window · row and column indexes start at 0. Each window is read separately.",
+    matrixLoading: "Reading matrix…", matrixError: "Unable to read the window. Try refreshing it.",
+    matrixBusy: "The PLC is busy. Try refreshing the window shortly.",
+    matrixStale: "The matrix definition changed. Close this window and open the matrix again.",
   },
   cs: {
     title: "AMiT Monitor", plc: "PLC", variables: "Proměnné", trends: "Sledování v čase",
@@ -93,6 +98,11 @@ export const TRANSLATIONS = {
     addStatusError: "Stav uložené změny se nepodařilo ověřit. Po obnovení spojení jej zkusíme načíst znovu.",
     addRetry: "Připravit nový náhled", addDetails: "Zobrazit podrobnosti",
     addPreviewReady: "Před uložením výběru zkontrolujte náhled.",
+    matrixOpen: "Otevřít matici", matrixRefresh: "Obnovit výřez", matrixRows: "Řádky", matrixCols: "Sloupce",
+    matrixHelp: "Výřez pouze pro čtení · řádky a sloupce se číslují od 0. Každý výřez se čte samostatně.",
+    matrixLoading: "Načítání matice…", matrixError: "Výřez se nepodařilo načíst. Zkuste jej obnovit.",
+    matrixBusy: "PLC je zaneprázdněné. Zkuste výřez za chvíli obnovit.",
+    matrixStale: "Definice matice se změnila. Zavřete okno a matici znovu otevřete.",
   },
 };
 
@@ -252,6 +262,7 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:12px;font
 .interval-settings{margin:16px 20px 0;padding:14px 16px;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#dce4eb);border-radius:12px}.interval-controls{display:flex;align-items:end;flex-wrap:wrap;gap:12px}.interval-controls label{display:flex;flex-direction:column;gap:4px}.interval-controls input{width:130px;border:1px solid var(--divider-color,#dce4eb);border-radius:7px;background:var(--card-background-color,#fff);padding:8px 10px}.interval-status{margin-top:10px}.interval-settings .small{margin-top:6px}
 .addition-status{margin:16px 20px 0;padding:14px 16px;border:1px solid var(--divider-color,#dce4eb);border-radius:10px;background:var(--card-background-color,#fff);display:flex;align-items:center;justify-content:space-between;gap:12px;overflow-wrap:anywhere}.primary{background:color-mix(in srgb,var(--primary-color,#007eaa) 18%,var(--card-background-color,#fff));border-color:var(--primary-color,#007eaa);font-weight:500}button.primary:hover{background:color-mix(in srgb,var(--primary-color,#007eaa) 25%,var(--card-background-color,#fff))}
 dialog{color:inherit;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#dce4eb);border-radius:14px;padding:20px;width:min(640px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;box-shadow:0 16px 64px #0005}dialog::backdrop{background:#0007}dialog h2{font-size:20px}dialog .dialog-body{display:grid;gap:12px;margin:12px 0}dialog .dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}.addition-list{max-height:30vh;overflow:auto;border:1px solid var(--divider-color,#dce4eb);border-radius:8px}.addition-item{padding:9px 12px;overflow-wrap:anywhere}.addition-item+.addition-item{border-top:1px solid var(--divider-color,#dce4eb)}.addition-warning{padding:10px 12px;background:var(--secondary-background-color,var(--primary-background-color,#eef3f7));border-radius:8px}
+.matrix-dialog{width:min(800px,calc(100vw - 24px));box-sizing:border-box}.matrix-identity{overflow-wrap:anywhere}.matrix-scroll{overflow:auto;max-height:50vh;margin:12px 0}.matrix-table{width:100%;table-layout:auto}.matrix-table th,.matrix-table td{padding:8px;text-align:right;white-space:nowrap}.matrix-table th{color:var(--secondary-text-color,#526775)}.matrix-navigation{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between}.matrix-navigation .pager{padding:4px 0}.matrix-status{min-height:24px;margin-top:12px}
 :host([compact]) .columns{grid-template-columns:minmax(0,1fr)}
 @media(max-width:600px){header{padding:14px}.columns{padding:14px;gap:14px;grid-template-columns:minmax(0,1fr)}.notice{padding:0 14px 18px}button{min-height:44px}select,input[type=search]{font-size:16px}h1{font-size:20px}}
 @media(prefers-reduced-motion:reduce){.changed .value{animation:none}}
@@ -292,9 +303,10 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._loading = false;
     this._pageAway = false;
     this._addition = null;
+    this._matrix = null;
     this._visibility = () => {
       this.model.breakSeries();
-      if (document.hidden) this._stopSubscription();
+      if (document.hidden) { this._stopSubscription(); this._closeMatrix(); }
       else this._sync();
       if (document.hidden) this._stopAdditionPoll(); else this._pollAddition();
       this._scheduleRender();
@@ -302,6 +314,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._pageHide = () => { this._pageAway = true; this._endSession(); };
     this._pageShow = () => { this._pageAway = false; this._loadEntries(); };
     this._disconnected = () => {
+      this._closeMatrix();
       this._listToken++;
       this._loading = false;
       this.model.breakSeries();
@@ -354,6 +367,7 @@ export class AMiTMonitorPanel extends HTMLElement {
   }
 
   _endSession() {
+    this._closeMatrix();
     this._resetAddition();
     this._stopSubscription();
     this._listToken++;
@@ -394,6 +408,7 @@ export class AMiTMonitorPanel extends HTMLElement {
   }
 
   _unbindConnection() {
+    this._closeMatrix();
     this._invalidateAddition();
     this._stopAdditionPoll();
     this._stopSubscription();
@@ -462,6 +477,7 @@ export class AMiTMonitorPanel extends HTMLElement {
       if (token !== this._token || !this.isConnected || this._paused || document.hidden) return;
       if (event.kind === "snapshot" || event.kind === "catalog") {
         this.model.snapshot(event);
+        this._checkMatrix();
         if (!this._intervalDraft && this._requestedInterval === null) this._intervalInput.value = String(this.model.interval);
         this._checkAddition();
         if (refreshCatalog) {
@@ -487,6 +503,7 @@ export class AMiTMonitorPanel extends HTMLElement {
           if (row) { row.classList.remove("changed"); void row.offsetWidth; row.classList.add("changed"); }
         }
       } else if (event.kind === "unavailable") {
+        this._closeMatrix();
         this._invalidateAddition();
         this._unavailable = true;
         this.model.breakSeries();
@@ -574,6 +591,14 @@ export class AMiTMonitorPanel extends HTMLElement {
       <div class="plots"></div><div class="chart-pager pager"></div><div class="limit" data-text="limited" hidden></div><div class="foot" data-text="snapshot"></div></section></div>
       <p class="notice" data-text="memory"></p>
       <dialog class="addition-dialog" aria-labelledby="addition-title"><h2 id="addition-title" data-text="addTitle"></h2><p class="addition-dialog-status" role="status" aria-live="polite"></p><div class="dialog-body"></div><div class="dialog-actions"><button class="addition-cancel" type="button"></button><button class="addition-retry" type="button" data-text="addRetry"></button><button class="addition-confirm primary" type="button" data-text="addConfirm"></button></div></dialog>`;
+    const matrixDialog = node("dialog", "matrix-dialog");
+    matrixDialog.setAttribute("aria-labelledby", "matrix-title");
+    matrixDialog.innerHTML = `<h2 id="matrix-title"></h2><p class="matrix-identity small muted"></p><p class="small muted" data-text="matrixHelp"></p><p class="matrix-status" role="status" aria-live="polite"></p><div class="matrix-scroll"><table class="matrix-table"></table></div><div class="matrix-navigation"><div role="group" data-label="matrixRows"><span data-text="matrixRows"></span><div class="matrix-row-pager pager"></div></div><div role="group" data-label="matrixCols"><span data-text="matrixCols"></span><div class="matrix-col-pager pager"></div></div></div><div class="dialog-actions"><button class="matrix-close" type="button" data-text="close"></button><button class="matrix-refresh" type="button" data-text="matrixRefresh"></button></div>`;
+    this.shadowRoot.append(matrixDialog);
+    this._matrixDialog = matrixDialog;
+    matrixDialog.onclose = () => { if (!matrixDialog.open) this._matrix = null; };
+    matrixDialog.querySelector(".matrix-close").onclick = () => this._closeMatrix();
+    matrixDialog.querySelector(".matrix-refresh").onclick = () => this._readMatrix();
     const find = selector => this.shadowRoot.querySelector(selector);
     this._search = find("input[type=search]");
     this._filter = find(".filter");
@@ -619,6 +644,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._filter.onchange = () => { this._type = this._filter.value; this._tablePage = 0; this._scheduleRender(); };
     this._haSelect.onchange = () => { this._haFilter = this._haSelect.value; this._tablePage = 0; this._scheduleRender(); };
     this._plcs.onchange = () => {
+      this._closeMatrix();
       this._resetAddition();
       this._stopSubscription();
       this._entryId = this._plcs.value || null;
@@ -633,7 +659,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     find(".pause").onclick = () => {
       this._paused = !this._paused;
       this.model.breakSeries();
-      if (this._paused) this._stopSubscription(); else this._sync();
+      if (this._paused) { this._stopSubscription(); this._closeMatrix(); } else this._sync();
       this._scheduleRender();
     };
     find(".clear").onclick = () => { this.model.clearHistory(); this._scheduleRender(); };
@@ -644,7 +670,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-text]").forEach(e => { e.textContent = this._t(e.dataset.text); });
     this.shadowRoot.querySelectorAll("[data-label]").forEach(e => { e.setAttribute("aria-label", this._t(e.dataset.label)); });
     this._search.placeholder = this._t("search");
-    this._filter.replaceChildren(...["all", "Float", "Int", "Long", "Array", "TimeArray", "Structure", "Unknown"].map(value => {
+    this._filter.replaceChildren(...["all", "Float", "Int", "Long", "Matrix Integer", "Matrix Long", "Matrix Float", "Array", "TimeArray", "Structure", "Unknown"].map(value => {
       const option = node("option", "", value === "all" ? this._t("allTypes") : value);
       option.value = value;
       return option;
@@ -740,6 +766,97 @@ export class AMiTMonitorPanel extends HTMLElement {
     this._renderRows();
     this._renderCharts();
     this._renderAddition();
+    this._renderMatrix();
+  }
+
+  _closeMatrix() {
+    this._matrix = null;
+    if (this._matrixDialog?.open) this._matrixDialog.close();
+  }
+
+  _checkMatrix() {
+    const state = this._matrix, variable = state && this.model.catalog.get(state.wid);
+    if (state && (state.runtime !== this.model.runtime || !variable?.matrix_readable || variable.revision !== state.revision)) {
+      state.error = "matrixStale"; state.loading = false; state.result = null;
+      state.stale = true;
+    }
+  }
+
+  _openMatrix(wid) {
+    const variable = this.model.catalog.get(wid);
+    if (!variable?.matrix_readable || !this._connection?.connected || this._unavailable || this._paused) return;
+    this._matrix = { wid, revision: variable.revision, runtime: this.model.runtime,
+      rowPage: 0, colPage: 0, variable, loading: false, result: null, error: null };
+    this._renderMatrix();
+    this._matrixDialog.showModal();
+    this._readMatrix();
+  }
+
+  async _readMatrix() {
+    const state = this._matrix, connection = this._connection;
+    this._checkMatrix();
+    if (!state || state.loading || state.stale || !connection?.connected) return;
+    const request = { type: "amit/monitor/read_matrix", entry_id: this._entryId,
+      runtime_id: state.runtime, wid: state.wid, revision: state.revision,
+      row: state.rowPage * 10, col: state.colPage * 6,
+      rows: Math.min(10, state.variable.rows - state.rowPage * 10),
+      cols: Math.min(6, state.variable.cols - state.colPage * 6) };
+    state.loading = true; state.error = null; state.result = null;
+    this._renderMatrix();
+    try {
+      const result = await connection.sendMessagePromise(request);
+      if (this._matrix !== state || this._connection !== connection) return;
+      this._checkMatrix();
+      if (state.stale) return;
+      if (!result || ["runtime_id", "wid", "revision", "row", "col", "rows", "cols"].some(key => result[key] !== request[key]) ||
+          !Number.isFinite(Date.parse(result.timestamp)) || !Array.isArray(result.values) || result.values.length !== request.rows ||
+          result.values.some(line => !Array.isArray(line) || line.length !== request.cols || line.some(v => v !== null && !Number.isFinite(v))))
+        throw new Error("Invalid matrix response");
+      state.result = result;
+    } catch (error) {
+      if (this._matrix !== state || this._connection !== connection) return;
+      state.error = state.stale || ["stale_selection", "unsupported_type"].includes(error?.code) ? "matrixStale" :
+        error?.code === "busy" ? "matrixBusy" : error?.code === "not_found" ? "unavailable" : "matrixError";
+      if (state.error === "matrixStale") state.stale = true;
+    } finally {
+      if (this._matrix === state) { state.loading = false; this._renderMatrix(); }
+    }
+  }
+
+  _renderMatrix() {
+    const state = this._matrix;
+    if (!state || !this._matrixDialog) return;
+    const find = selector => this._matrixDialog.querySelector(selector), variable = state.variable;
+    find("h2").textContent = this._variableName(variable);
+    find(".matrix-identity").textContent = `WID ${state.wid} · ${variable.type} · ${variable.rows} × ${variable.cols}`;
+    const status = find(".matrix-status");
+    status.textContent = state.loading ? this._t("matrixLoading") : state.error ? this._t(state.error) :
+      state.result ? `${this._t("lastRead")}: ${this._time(state.result.timestamp)}` : "";
+    status.className = `matrix-status ${state.error ? "error" : "muted"}`;
+    find(".matrix-refresh").disabled = state.loading || state.stale || !this._connection?.connected;
+    const table = find("table"); table.replaceChildren();
+    if (state.result) {
+      const result = state.result, head = node("thead"), header = node("tr");
+      header.append(node("th", "", ""));
+      for (let col = 0; col < result.cols; col++) {
+        const th = node("th", "", String(result.col + col)); th.scope = "col"; header.append(th);
+      }
+      head.append(header); table.append(head);
+      const body = node("tbody");
+      result.values.forEach((line, row) => {
+        const tr = node("tr"), th = node("th", "", String(result.row + row)); th.scope = "row"; tr.append(th);
+        line.forEach(value => tr.append(node("td", "number", this._format(value)))); body.append(tr);
+      });
+      table.append(body);
+    }
+    for (const [axis, size, count] of [["row", 10, variable.rows], ["col", 6, variable.cols]]) {
+      const pager = find(`.matrix-${axis}-pager`);
+      this._pager(pager, state[`${axis}Page`], count, size, page => {
+        if (state.loading || state.stale) return;
+        state[`${axis}Page`] = page; this._readMatrix();
+      });
+      if (state.loading || state.stale) pager.querySelectorAll("button").forEach(button => { button.disabled = true; });
+    }
   }
 
   _additionBinding() {
@@ -972,8 +1089,9 @@ export class AMiTMonitorPanel extends HTMLElement {
         const nameCell = node("td"), name = node("span", "name"), metadata = node("span", "identity small muted"), entities = node("div", "entity-info small muted");
         nameCell.append(name, metadata, entities);
         const valueCell = node("td"), value = node("span", "number value"), reading = node("div", "small"), last = node("div", "small muted");
-        valueCell.append(value, reading, last); row.append(checkCell, nameCell, valueCell);
-        entry = { row, checkbox, name, metadata, entities, value, reading, last };
+        const matrixOpen = node("button"); matrixOpen.type = "button";
+        valueCell.append(value, reading, last, matrixOpen); row.append(checkCell, nameCell, valueCell);
+        entry = { row, checkbox, name, metadata, entities, value, reading, last, matrixOpen };
         this._rows.set(variable.wid, entry);
       }
       if (entry.row !== nextRow) this._tbody.insertBefore(entry.row, nextRow);
@@ -986,11 +1104,17 @@ export class AMiTMonitorPanel extends HTMLElement {
       entry.metadata.textContent = this._variableIdentity(variable);
       entry.entities.textContent = this._entityInfo(variable);
       entry.entities.hidden = !entry.entities.textContent;
+      entry.matrixOpen.hidden = !variable.matrix_readable;
+      entry.matrixOpen.textContent = this._t("matrixOpen");
+      entry.matrixOpen.disabled = this._paused || !this._connection?.connected || this._unavailable;
+      entry.matrixOpen.onclick = () => this._openMatrix(variable.wid);
+      entry.value.hidden = Boolean(variable.matrix_readable);
       const sample = this.model.latest.get(variable.wid);
       const status = !variable.readable ? "unsupported" : sample?.status || "waiting";
       entry.value.textContent = status === "ok" ? `${this._format(sample.value)} ${variable.unit || ""}` : "—";
       const stale = sample && Date.now() - Date.parse(sample.timestamp) > this.model.readingInterval(variable.wid) * 2000;
       entry.reading.textContent = status === "ok" ? `${this._time(sample.timestamp)} · ${this._age(sample.timestamp)}${stale ? " · " + this._t("stale") : ""}` : this._t(status);
+      if (variable.matrix_readable) entry.reading.textContent = `${variable.rows} × ${variable.cols}`;
       entry.reading.className = `small ${status === "read_error" || status === "invalid" ? "error" : "muted"}`;
       entry.last.textContent = sample?.status !== "ok" && Number.isFinite(sample?.last_value) ?
         `${this._t("lastKnown")}: ${this._format(sample.last_value)} ${variable.unit || ""} · ${this._time(sample.last_success)}` : "";
