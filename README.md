@@ -105,7 +105,7 @@ To hide or show the sidebar item, open your **User profile → Appearance**, the
 3. Select variables to start recording new readings in their graphs.
 4. Use the graph pointer or sample slider to inspect an actual reading and its time. The slider also supports keyboard navigation.
 
-The table includes all variables discovered by the selected target profile, including variables without Home Assistant entities. It reads Int16, Int32, and Float values. Arrays, time arrays, and structures remain listed as unsupported for reading. The table shows 50 rows per page; the graph area shows four selected variables per page. Other selected variables continue recording while their graphs are on another page.
+The table includes all variables discovered by the selected target profile, including variables without Home Assistant entities. It reads Int16, Int32, and Float values. Matrix Integer, Matrix Long, and Matrix Float variables (previously labelled Array, TimeArray, and Structure) remain listed as unsupported for reading. The table shows 50 rows per page; the graph area shows four selected variables per page. Other selected variables continue recording while their graphs are on another page.
 
 For variables with HA entities, the table and graphs show their entity names, including custom names. The original PLC name, WID, and entity IDs remain visible below. Disabled entities are marked and included in **With HA entity**; a variable selected in configuration without a registry entity is marked separately. Renaming an entity updates its labels without interrupting the graph. Filtering the table keeps the selection and continues recording hidden variables.
 

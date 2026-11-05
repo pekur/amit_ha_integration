@@ -22,9 +22,13 @@ class VarType(IntEnum):
     INT16 = 0
     INT32 = 1
     FLOAT = 2
-    ARRAY = 3
-    TIME_ARRAY = 4
-    STRUCTURE = 5
+    MATRIX_INT16 = 3
+    MATRIX_INT32 = 4
+    MATRIX_FLOAT = 5
+    # Keep the old names as aliases for callers using earlier releases.
+    ARRAY = MATRIX_INT16
+    TIME_ARRAY = MATRIX_INT32
+    STRUCTURE = MATRIX_FLOAT
 
 
 @dataclass
@@ -32,9 +36,14 @@ class Variable:
     """Represents an AMiT PLC variable."""
     name: str
     wid: int
-    var_type: VarType
+    var_type: VarType | int
     value: Any = None
     writable: bool = True
+    rows: Optional[int] = None
+    cols: Optional[int] = None
+    station: Optional[int] = None
+    metadata_version: Optional[int] = None
+    catalog_index: Optional[int] = None
     
     @property
     def type_name(self) -> str:
@@ -43,15 +52,44 @@ class Variable:
             VarType.INT16: "Int",
             VarType.INT32: "Long", 
             VarType.FLOAT: "Float",
-            VarType.ARRAY: "Array",
-            VarType.TIME_ARRAY: "TimeArray",
-            VarType.STRUCTURE: "Structure",
+            VarType.MATRIX_INT16: "Matrix Integer",
+            VarType.MATRIX_INT32: "Matrix Long",
+            VarType.MATRIX_FLOAT: "Matrix Float",
         }
         return names.get(self.var_type, "Unknown")
     
     def is_readable(self) -> bool:
         """Check if variable can be read (simple types only)."""
         return self.var_type in (VarType.INT16, VarType.INT32, VarType.FLOAT)
+
+
+class _InvalidVariableMetadata(ValueError):
+    """Catalog data cannot be safely interpreted."""
+
+
+def _parse_variable_info(data: bytes) -> Optional[Variable]:
+    """Decode the 26-byte DB-Net catalog record, or an empty slot."""
+    if len(data) != 26:
+        raise _InvalidVariableMetadata("Catalog response must contain 26 bytes")
+    if not any(data):
+        return None
+    version = struct.unpack_from('<H', data)[0]
+    # The published layout says 0x0100; a live DB-Net/IP PLC returns 0x0001.
+    if version not in (0x0001, 0x0100):
+        raise _InvalidVariableMetadata("Unsupported catalog metadata version")
+    type_code = data[2] & 0x07
+    rows, cols, wid, index = struct.unpack_from('<HHHH', data, 4)
+    if not rows or not cols or (type_code <= 2 and (rows, cols) != (1, 1)):
+        raise _InvalidVariableMetadata("Invalid catalog variable dimensions")
+    try:
+        var_type = VarType(type_code)
+    except ValueError:
+        var_type = type_code  # Preserve reserved codes 6 and 7 as unknown.
+    return Variable(
+        name=data[12:26].split(b'\x00', 1)[0].decode('latin-1'),
+        wid=wid, var_type=var_type, rows=rows, cols=cols,
+        station=data[3] & 0x1F, metadata_version=version, catalog_index=index,
+    )
 
 
 def _randomize(seed: int, password: int) -> int:
@@ -466,7 +504,8 @@ class AMiTClient:
 
         Raises:
             ConnectionError: The client is disconnected or communication fails
-                and a previously readable catalog slot cannot be read again.
+                and a previously readable catalog slot cannot be read again,
+                or catalog metadata has an unsupported version or invalid layout.
         """
         if not self.connected:
             raise ConnectionError("Not connected to PLC")
@@ -508,18 +547,9 @@ class AMiTClient:
                     continue
                 if status not in (0x00, 0x08):
                     raise RuntimeError(f"PLC rejected catalog read: status {status}")
-                if len(data) < 22:
-                    raise ValueError("Catalog response is too short")
-                
-                wid = struct.unpack_from('<H', data, 8)[0]
-                var_type_code = data[2]
-                
-                name_bytes = data[12:24]
-                null_idx = name_bytes.find(b'\x00')
-                if null_idx > 0:
-                    name = name_bytes[:null_idx].decode('latin-1', errors='replace')
-                else:
-                    name = name_bytes.rstrip(b'\x00').decode('latin-1', errors='replace')
+                variable = _parse_variable_info(data)
+                name = variable.name if variable is not None else ""
+                wid = variable.wid if variable is not None else 0
                 
                 # Apply WID range filter
                 wid_in_range = (
@@ -538,19 +568,8 @@ class AMiTClient:
                         await asyncio.sleep(0.001)
                         continue
 
-                    try:
-                        var_type = VarType(var_type_code)
-                    except ValueError:
-                        var_type = VarType.STRUCTURE
-                    
-                    writable = not (is_readonly_fn(name) if is_readonly_fn is not None else False)
-                    
-                    variables.append(Variable(
-                        name=name,
-                        wid=wid,
-                        var_type=var_type,
-                        writable=writable
-                    ))
+                    variable.writable = not (is_readonly_fn(name) if is_readonly_fn is not None else False)
+                    variables.append(variable)
                     consecutive_failures = 0
                     
                     if len(variables) % 100 == 0:
@@ -558,6 +577,9 @@ class AMiTClient:
                 else:
                     consecutive_failures += 1
                 
+            except _InvalidVariableMetadata as err:
+                # Do not publish a partial catalog or treat corrupt data as its end.
+                raise ConnectionError("Invalid variable catalog metadata") from err
             except TimeoutError as e:
                 _LOGGER.debug(f"Timeout reading variable at index {index}")
                 consecutive_failures += 1
@@ -587,7 +609,7 @@ class AMiTClient:
                     self._create_read_memory_frame(0xFFFD0000 + last_valid_index, 26)
                 )
                 status, probe_data = self._validate_response(response, 0x03)
-                if status not in (0x00, 0x08) or len(probe_data) < 22:
+                if status not in (0x00, 0x08) or _parse_variable_info(probe_data) is None:
                     raise ValueError("Invalid catalog probe response")
             except Exception as err:
                 raise ConnectionError("Failed to load variable catalog from PLC") from err

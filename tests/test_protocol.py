@@ -346,6 +346,34 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
             await self.client.write_variable(self.variable, 1)
         self.transport.sendto.assert_not_called()
 
+    async def test_matrix_aliases_and_unknown_types_cannot_use_scalar_io(self):
+        for code, old_name, new_name, label in (
+            (3, "ARRAY", "MATRIX_INT16", "Matrix Integer"),
+            (4, "TIME_ARRAY", "MATRIX_INT32", "Matrix Long"),
+            (5, "STRUCTURE", "MATRIX_FLOAT", "Matrix Float"),
+        ):
+            old_type = getattr(self.protocol.VarType, old_name)
+            new_type = getattr(self.protocol.VarType, new_name)
+            self.assertIs(old_type, new_type)
+            self.assertEqual(int(new_type), code)
+            self.assertEqual(self.protocol.Variable("Matrix", 1, new_type).type_name, label)
+        for code in range(3, 8):
+            with self.subTest(code=code):
+                variable = self.protocol.Variable("Unsupported", 4001, code)
+                self.assertFalse(variable.is_readable())
+                with self.assertRaises(ValueError):
+                    await self.client.read_variable(variable)
+                with self.assertRaises(ValueError):
+                    await self.client.write_variable(variable, 1)
+        self.transport.sendto.assert_not_called()
+
+    def test_legacy_positional_variable_arguments_keep_their_meaning(self):
+        variable = self.protocol.Variable("Sample", 4001, self.protocol.VarType.INT16, 123, False)
+        self.assertEqual(variable.value, 123)
+        self.assertFalse(variable.writable)
+        self.assertIsNone(variable.rows)
+        self.assertIsNone(variable.metadata_version)
+
 
 if __name__ == "__main__":
     unittest.main()

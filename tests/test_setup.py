@@ -310,7 +310,10 @@ class SetupTests(HAStubTestCase):
                     index = struct.unpack_from("<I", frame, 8)[0] - 0xFFFD0000
                     data = bytearray(26)
                     if index == 0:
+                        struct.pack_into("<H", data, 0, 1)
                         data[2] = 2
+                        data[3] = 4
+                        struct.pack_into("<HH", data, 4, 1, 1)
                         struct.pack_into("<H", data, 8, 5000)
                         data[12:17] = b"Valid"
                     return long_frame(bytes(data), function=0x83)

@@ -24,14 +24,77 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         # The transport boundary is mocked; never connect to a real endpoint.
         self.client._connected = True
 
-    def slot(self, wid=0, name="", var_type=0):
+    def slot(self, wid=0, name="", var_type=0, *, version=1, rows=1, cols=1,
+             station=4, index=0, size=26):
         data = bytearray(26)
+        struct.pack_into("<H", data, 0, version)
         data[2] = var_type
-        struct.pack_into("<H", data, 8, wid)
-        encoded = name.encode("latin-1")[:12]
+        data[3] = station
+        struct.pack_into("<HHHH", data, 4, rows, cols, wid, index)
+        encoded = name.encode("latin-1")[:14]
         data[12:12 + len(encoded)] = encoded
-        frame = bytes([0x68, 30, 30, 0x68, 31, 4, 8, 0x83]) + data
+        data = (data + bytes(max(0, size - 26)))[:size]
+        frame = bytes([0x68, size + 4, size + 4, 0x68, 31, 4, 8, 0x83]) + data
         return frame + bytes([self.protocol._calc_checksum(frame[4:]), 0x16])
+
+    async def test_metadata_versions_types_flags_and_dimensions(self):
+        for version in (1, 0x100):
+            for type_code in range(8):
+                with self.subTest(version=version, type_code=type_code):
+                    rows, cols = (1, 1) if type_code <= 2 else (3, 8)
+                    self.client._send_receive = AsyncMock(return_value=self.slot(
+                        1234, "Matrix", type_code | 0xF8, version=version,
+                        rows=rows, cols=cols, station=0xE7, index=42,
+                    ))
+                    variable, = await self.client.load_variables(max_variables=1)
+                    self.assertEqual(variable.var_type, type_code)
+                    self.assertEqual((variable.rows, variable.cols), (rows, cols))
+                    self.assertEqual(variable.station, 7)
+                    self.assertEqual(variable.catalog_index, 42)
+                    self.assertEqual(variable.metadata_version, version)
+                    self.assertEqual(variable.wid, 1234)
+                    self.assertEqual(variable.is_readable(), type_code <= 2)
+                    if type_code >= 6:
+                        self.assertEqual(variable.type_name, "Unknown")
+                        self.assertNotEqual(variable.var_type, self.protocol.VarType.MATRIX_FLOAT)
+
+    async def test_full_name_and_first_null_termination(self):
+        for name, expected in (("LongVariable13", "LongVariable13"),
+                               ("Name\x00Ignored", "Name"),
+                               ("\x00Ignored", None), ("Teplota\xe1", "Teplota\xe1")):
+            with self.subTest(name=name):
+                self.client._send_receive = AsyncMock(return_value=self.slot(4001, name))
+                variables = await self.client.load_variables(
+                    max_variables=1, is_readonly_fn=lambda value: value == expected)
+                self.assertEqual([v.name for v in variables], [] if expected is None else [expected])
+                if variables:
+                    self.assertFalse(variables[0].writable)
+
+    async def test_invalid_metadata_never_publishes_partial_catalog(self):
+        for options in ({"version": 0}, {"version": 2}, {"rows": 0}, {"cols": 0},
+                        {"rows": 2}, {"cols": 2}, {"size": 22}, {"size": 25}, {"size": 27}):
+            with self.subTest(options=options):
+                self.client._send_receive = AsyncMock(side_effect=[
+                    self.slot(4001, "Good"), self.slot(4002, "Invalid", **options),
+                    self.slot(4003, "Later"),
+                ])
+                with self.assertRaisesRegex(ConnectionError, "metadata"):
+                    await self.client.load_variables()
+                self.assertEqual(self.client._send_receive.await_count, 2)
+
+    async def test_zero_filled_slot_remains_a_catalog_boundary(self):
+        self.client._send_receive = AsyncMock(return_value=self.slot(
+            version=0, rows=0, cols=0, station=0))
+        self.assertEqual(await self.client.load_variables(), [])
+        self.assertEqual(self.client._send_receive.await_count, 10)
+
+    async def test_catalog_end_probe_validates_metadata(self):
+        self.client._send_receive = AsyncMock(side_effect=(
+            [self.slot(4001, "Good")] + [TimeoutError("end")] * 20
+            + [self.slot(4001, "Good", version=2)]
+        ))
+        with self.assertRaises(ConnectionError):
+            await self.client.load_variables()
 
     async def test_disconnected_client_raises_without_sending(self):
         self.client._connected = False
