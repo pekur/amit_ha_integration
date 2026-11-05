@@ -108,13 +108,231 @@ class WebSocketTests(HAStubTestCase):
         self.websocket.websocket_subscribe(self.hass, connection or self.connection,
                                           {"id": msg_id, "entry_id": entry_id})
 
+    def matrix_setup(self):
+        self.matrix = self.protocol.Variable("Matrix", 3, self.protocol.VarType.MATRIX_INT16,
+                                             writable=False, rows=20, cols=20,
+                                             station=4, metadata_version=1)
+        self.client.read_matrix_block = AsyncMock(return_value=[[1, 2], [3, 4]])
+        self.monitor.update_catalog([self.variable, self.matrix])
+        return self.matrix_message()
+
+    def matrix_message(self, **changes):
+        revision = next(v["revision"] for v in self.monitor.snapshot()["variables"] if v["wid"] == 3)
+        return {"id": 10, "entry_id": "first", "runtime_id": self.monitor.runtime_id,
+                "wid": 3, "revision": revision, "row": 0, "col": 0, "rows": 2, "cols": 2,
+                **changes}
+
+    async def matrix_read(self, message, connection=None):
+        tasks = []
+        def schedule(coro, name):
+            task = asyncio.create_task(coro, name=name)
+            tasks.append(task)
+            return task
+        with patch.object(self.hass, "async_create_background_task", side_effect=schedule):
+            self.websocket.websocket_matrix_read(self.hass, connection or self.connection, message)
+        for task in tasks:
+            await task
+
+    async def test_matrix_read_returns_only_window_and_safe_metadata(self):
+        message = self.matrix_setup()
+        self.client.read_matrix_block.return_value = [[1, float("nan")], [float("inf"), -2]]
+        await self.matrix_read(message)
+        result = self.connection.send_result.call_args.args[1]
+        self.assertEqual(result["values"], [[1, None], [None, -2]])
+        self.assertEqual(result["runtime_id"], self.monitor.runtime_id)
+        self.assertEqual(result["revision"], message["revision"])
+        self.assertTrue(result["timestamp"])
+        self.assertNotIn("private-secret", json.dumps(result, allow_nan=False))
+        self.assertEqual(self.connection.subscriptions, {})
+        self.assertEqual(self.monitor.snapshot()["samples"], [])
+        self.client.read_matrix_block.assert_awaited_once_with(self.matrix, 0, 0, 2, 2)
+        self.client.write_variable.assert_not_awaited()
+        self.hass.config_entries.async_update_entry.assert_not_called()
+        self.hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_matrix_metadata_does_not_enable_scalar_subscription_or_entities(self):
+        self.matrix_setup()
+        self.subscribe()
+        matrix = self.connection.send_event.call_args.args[1]["variables"][1]
+        self.assertTrue(matrix["matrix_readable"])
+        self.assertFalse(matrix["readable"])
+        self.assertFalse(matrix["configured"])
+        self.assertEqual((matrix["rows"], matrix["cols"], matrix["station"], matrix["metadata_version"]),
+                         (20, 20, 4, 1))
+        self.assertEqual(self.monitor.snapshot()["intervals"], {0: 30})
+        await asyncio.sleep(0)
+        self.client.read_matrix_block.assert_not_awaited()
+        self.websocket.websocket_subscribe(self.hass, self.connection,
+            {"id": 2, "entry_id": "first", "wids": [3]})
+        self.assertEqual(self.connection.send_error.call_args.args[1], "invalid_request")
+
+    async def test_matrix_validation_and_admin_gate_never_read_plc(self):
+        message = self.matrix_setup()
+        self.connection.user.is_admin = False
+        with self.assertRaises(PermissionError):
+            await self.matrix_read(message)
+        self.connection.user.is_admin = True
+        for changes, code in (
+            ({"entry_id": "missing"}, "not_found"),
+            ({"runtime_id": "old"}, "stale_selection"),
+            ({"revision": -1}, "stale_selection"), ({"wid": 99}, "stale_selection"),
+            ({"wid": True}, "invalid_request"), ({"revision": False}, "invalid_request"),
+            ({"row": -1}, "invalid_request"), ({"col": 20}, "invalid_request"),
+            ({"rows": 0}, "invalid_request"), ({"cols": True}, "invalid_request"),
+            ({"rows": 20, "cols": 20}, "invalid_request"),
+            ({"row": 19, "rows": 2}, "invalid_request"),
+            ({"row": "0"}, "invalid_request"),
+            ({"wid": 0, "revision": self.monitor.snapshot()["variables"][0]["revision"]}, "unsupported_type"),
+        ):
+            with self.subTest(changes=changes):
+                await self.matrix_read({**message, **changes})
+                self.assertEqual(self.connection.send_error.call_args.args[1], code)
+                self.assertEqual(self.connection.subscriptions, {})
+        self.client.read_matrix_block.assert_not_awaited()
+
+    async def test_matrix_concurrent_panels_and_rate_limit_are_shared(self):
+        message = self.matrix_setup()
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def read(*args):
+            entered.set()
+            await release.wait()
+            return [[1, 2], [3, 4]]
+        self.client.read_matrix_block.side_effect = read
+        task = asyncio.create_task(self.matrix_read(message))
+        await entered.wait()
+        second = self.connection_stub()
+        await self.matrix_read({**message, "id": 11}, second)
+        self.assertEqual(second.send_error.call_args.args[1], "busy")
+        self.assertEqual(self.client.read_matrix_block.await_count, 1)
+        release.set()
+        await task
+        await self.matrix_read({**message, "id": 12}, second)
+        self.assertEqual(second.send_error.call_args.args[1], "busy")
+        with patch.object(self.monitor_module, "monotonic", return_value=self.monitor._matrix_after + .01):
+            await self.matrix_read({**message, "id": 13}, second)
+        self.assertEqual(self.client.read_matrix_block.await_count, 2)
+
+    async def test_matrix_respects_normal_reads_and_connection_recovery(self):
+        message = self.matrix_setup()
+        with self.monitor.normal_reads():
+            await self.matrix_read(message)
+        self.assertEqual(self.connection.send_error.call_args.args[1], "busy")
+        self.client.read_matrix_block.assert_not_awaited()
+        self.client.read_matrix_block.side_effect = TimeoutError("private detail")
+        await self.matrix_read(message)
+        self.assertEqual(self.connection.send_error.call_args.args[1], "read_error")
+        self.assertNotIn("private detail", str(self.connection.send_error.call_args))
+        with patch.object(self.monitor_module, "monotonic", return_value=self.monitor._matrix_after + .01):
+            await self.matrix_read(message)
+        self.assertEqual(self.connection.send_error.call_args.args[1], "busy")
+        self.assertEqual(self.client.read_matrix_block.await_count, 1)
+
+    async def test_matrix_catalog_change_discards_pending_result(self):
+        message = self.matrix_setup()
+        async def read(*args):
+            changed = self.protocol.Variable("Matrix", 3, self.protocol.VarType.MATRIX_INT16,
+                                             rows=10, cols=20, station=4, metadata_version=1)
+            self.monitor.update_catalog([self.variable, changed])
+            return [[1, 2], [3, 4]]
+        self.client.read_matrix_block.side_effect = read
+        await self.matrix_read(message)
+        self.assertEqual(self.connection.send_error.call_args.args[1], "stale_selection")
+        self.connection.send_result.assert_not_called()
+        self.assertNotEqual(self.matrix_message()["revision"], message["revision"])
+
+    async def test_matrix_disconnect_cancels_read_and_cleans_up(self):
+        message = self.matrix_setup()
+        entered = asyncio.Event()
+        async def read(*args):
+            entered.set()
+            await asyncio.Event().wait()
+        self.client.read_matrix_block.side_effect = read
+        task = asyncio.create_task(self.matrix_read(message))
+        await entered.wait()
+        self.connection.subscriptions[message["id"]]()
+        await task
+        self.assertIsNone(self.monitor._matrix_task)
+        self.assertEqual(self.connection.subscriptions, {})
+        self.connection.send_result.assert_not_called()
+        self.connection.send_error.assert_not_called()
+
+    async def test_matrix_disconnect_before_task_starts_never_reads_plc(self):
+        message = self.matrix_setup()
+        tasks = []
+        def schedule(coro, name):
+            task = asyncio.create_task(coro, name=name)
+            tasks.append(task)
+            return task
+        with patch.object(self.hass, "async_create_background_task", side_effect=schedule):
+            self.websocket.websocket_matrix_read(self.hass, self.connection, message)
+        self.connection.subscriptions[message["id"]]()
+        self.connection.subscriptions.clear()
+        with self.assertRaises(asyncio.CancelledError):
+            await tasks[0]
+        self.client.read_matrix_block.assert_not_awaited()
+        self.assertIsNone(self.monitor._matrix_task)
+
+    async def test_matrix_schedule_failure_releases_connection_cleanup(self):
+        message = self.matrix_setup()
+        with patch.object(self.hass, "async_create_background_task", side_effect=RuntimeError):
+            self.websocket.websocket_matrix_read(self.hass, self.connection, message)
+        self.assertEqual(self.connection.subscriptions, {})
+        self.assertEqual(self.connection.send_error.call_args.args[1], "read_error")
+        self.client.read_matrix_block.assert_not_awaited()
+
+    @unittest.skipUnless(hasattr(asyncio, "eager_task_factory"), "Requires Python 3.12+")
+    async def test_matrix_eager_task_leaves_no_cleanup_after_completion(self):
+        message = self.matrix_setup()
+        loop = asyncio.get_running_loop()
+        factory = loop.get_task_factory()
+        try:
+            loop.set_task_factory(asyncio.eager_task_factory)
+            self.websocket.websocket_matrix_read(self.hass, self.connection, message)
+        finally:
+            loop.set_task_factory(factory)
+        self.connection.send_result.assert_called_once()
+        self.assertEqual(self.connection.subscriptions, {})
+        self.assertIsNone(self.monitor._matrix_task)
+
+    async def test_matrix_unload_cancels_read_and_rejects_future_requests(self):
+        message = self.matrix_setup()
+        entered = asyncio.Event()
+        async def read(*args):
+            entered.set()
+            await asyncio.Event().wait()
+        self.client.read_matrix_block.side_effect = read
+        task = asyncio.create_task(self.matrix_read(message))
+        await entered.wait()
+        await self.monitor.async_close()
+        await task
+        self.assertEqual(self.connection.send_error.call_args.args[1], "not_found")
+        self.assertIsNone(self.monitor._matrix_task)
+        self.assertEqual(self.connection.subscriptions, {})
+        await self.matrix_read(message)
+        self.assertEqual(self.client.read_matrix_block.await_count, 1)
+
+    async def test_matrix_requests_do_not_block_another_plc(self):
+        message = self.matrix_setup()
+        other_client = SimpleNamespace(read_matrix_block=AsyncMock(return_value=[[7]]))
+        other = self.monitor_module.AMiTMonitor(self.hass, other_client, [self.matrix], [], 30)
+        self.addAsyncCleanup(other.async_close)
+        self.hass.data["amit"]["second"] = {"monitor": other}
+        with self.monitor.normal_reads():
+            await self.matrix_read(message)
+            await self.matrix_read({**message, "id": 11, "entry_id": "second",
+                "runtime_id": other.runtime_id, "revision": other.snapshot()["variables"][0]["revision"],
+                "rows": 1, "cols": 1})
+        self.assertEqual(self.connection.send_result.call_args.args[1]["values"], [[7]])
+        self.client.read_matrix_block.assert_not_awaited()
+
     async def test_registration_is_separate_from_loading_or_unloading_plcs(self):
         self.websocket.async_register_commands(self.hass)
-        self.assertEqual(self.api.async_register_command.call_count, 5)
+        self.assertEqual(self.api.async_register_command.call_count, 6)
         handlers = [c.args[1] for c in self.api.async_register_command.call_args_list]
         self.assertEqual(handlers, [self.websocket.websocket_list,
                                     self.websocket.websocket_subscribe, self.websocket.websocket_preview_add,
-                                    self.websocket.websocket_confirm_add, self.websocket.websocket_addition_status])
+                                    self.websocket.websocket_confirm_add, self.websocket.websocket_addition_status,
+                                    self.websocket.websocket_matrix_read])
 
     async def test_nonadmin_cannot_list_or_subscribe(self):
         self.connection.user.is_admin = False

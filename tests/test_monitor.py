@@ -392,6 +392,43 @@ class MonitorTests(HAStubTestCase):
         monitor.update_catalog([self.normal])
         self.assertGreater(monitor.snapshot()["variables"][0]["revision"], revision)
 
+    async def test_matrix_metadata_changes_invalidate_its_revision(self):
+        options = {"rows": 2, "cols": 3, "station": 4, "metadata_version": 1}
+        def matrix(**changes):
+            return self.protocol.Variable("Matrix", 3, self.protocol.VarType.MATRIX_INT16,
+                                          **{**options, **changes})
+        monitor = self.monitor([matrix()], [])
+        revision = monitor.snapshot()["variables"][0]["revision"]
+        monitor.update_catalog([matrix()])
+        self.assertEqual(monitor.snapshot()["variables"][0]["revision"], revision)
+        for key, value in (("rows", 3), ("cols", 4), ("station", 5), ("metadata_version", 0x100)):
+            monitor.update_catalog([matrix(**{key: value})])
+            new_revision = monitor.snapshot()["variables"][0]["revision"]
+            self.assertGreater(new_revision, revision)
+            revision = new_revision
+        self.client.read_variable.assert_not_awaited()
+
+    async def test_matrix_read_yields_extra_polling_until_completion(self):
+        matrix = self.protocol.Variable("Matrix", 3, self.protocol.VarType.MATRIX_INT16, rows=1, cols=1)
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def read(*args):
+            entered.set()
+            await release.wait()
+            return [[1]]
+        self.client.read_matrix_block = AsyncMock(side_effect=read)
+        monitor = self.monitor([self.extra, matrix], [])
+        revision = monitor.snapshot()["variables"][1]["revision"]
+        task = asyncio.create_task(monitor.read_matrix(monitor.runtime_id, 3, revision, 0, 0, 1, 1))
+        await entered.wait()
+        monitor.subscribe(Mock())
+        await asyncio.sleep(.01)
+        self.client.read_variable.assert_not_awaited()
+        release.set()
+        await task
+        await self.next_read()
+        self.assertEqual(self.client.read_variable.await_args.args[0].wid, self.extra.wid)
+        self.assertEqual(self.client.read_matrix_block.await_count, 1)
+
     async def test_old_read_is_ignored_after_last_unsubscribe_and_resubscribe(self):
         monitor = self.monitor()
         release = asyncio.Event()

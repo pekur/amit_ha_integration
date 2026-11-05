@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from homeassistant.const import UnitOfTemperature
 
-from .protocol import AMiTClient, Variable
+from .protocol import AMiTClient, Variable, VarType
 
 if TYPE_CHECKING:
     from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -22,10 +22,18 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 MIN_READ_DELAY = 0.2
+MATRIX_READ_INTERVAL = 1.0
 
 
 def _signature(variable: Variable) -> tuple:
-    return variable.wid, variable.name, variable.var_type
+    return (variable.wid, variable.name, variable.var_type, variable.rows,
+            variable.cols, variable.station, variable.metadata_version)
+
+
+def _matrix_readable(variable: Variable) -> bool:
+    return (variable.var_type in (VarType.MATRIX_INT16, VarType.MATRIX_INT32, VarType.MATRIX_FLOAT)
+            and type(variable.rows) is int and 1 <= variable.rows <= 65535
+            and type(variable.cols) is int and 1 <= variable.cols <= 65535)
 
 
 class AMiTMonitor:
@@ -56,6 +64,8 @@ class AMiTMonitor:
         self._normal_busy = 0
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._matrix_task: asyncio.Task | None = None
+        self._matrix_after = 0.0
         self._due: dict[int, float] = {}
         self._next_read = 0.0
         self._retry_after = 0.0
@@ -79,6 +89,8 @@ class AMiTMonitor:
             "variables": [
                 {"wid": v.wid, "name": v.name, "type": v.type_name,
                  "readable": v.is_readable(), "revision": self._revisions[v.wid],
+                 "matrix_readable": _matrix_readable(v), "rows": v.rows, "cols": v.cols,
+                 "station": v.station, "metadata_version": v.metadata_version,
                  "unit": self._unit(v)}
                 for v in self._variables.values()
             ],
@@ -94,6 +106,47 @@ class AMiTMonitor:
         ):
             return UnitOfTemperature.CELSIUS
         return None
+
+    async def read_matrix(self, runtime_id: str, wid: int, revision: int,
+                          row: int, col: int, rows: int, cols: int) -> dict:
+        """Read one bounded window. Reject concurrent requests instead of queuing."""
+        if self._closed:
+            raise ValueError("not_found")
+        if (type(wid) is not int or type(revision) is not int
+                or any(type(v) is not int for v in (row, col, rows, cols))):
+            raise ValueError("invalid_request")
+        if runtime_id != self.runtime_id or self._revisions.get(wid) != revision:
+            raise ValueError("stale_selection")
+        variable = self._variables[wid]
+        if not _matrix_readable(variable):
+            raise ValueError("unsupported_type")
+        limit = 120 if variable.var_type == VarType.MATRIX_INT16 else 60
+        if (row < 0 or col < 0 or rows < 1 or cols < 1 or rows * cols > limit
+                or row + rows > variable.rows or col + cols > variable.cols):
+            raise ValueError("invalid_request")
+        if (self._matrix_task is not None or self._normal_busy
+                or monotonic() < max(self._matrix_after, self._next_read, self._retry_after)):
+            raise ValueError("busy")
+        self._matrix_task = asyncio.current_task()
+        try:
+            values = await self._client.read_matrix_block(variable, row, col, rows, cols)
+            if self._closed:
+                raise ValueError("not_found")
+            if self._revisions.get(wid) != revision:
+                raise ValueError("stale_selection")
+            # JSON cannot represent IEEE NaN or infinity. Keep the cell position.
+            values = [[v if math.isfinite(v) else None for v in line] for line in values]
+            return {"runtime_id": self.runtime_id, "wid": wid, "revision": revision,
+                    "row": row, "col": col, "rows": rows, "cols": cols,
+                    "timestamp": datetime.now(timezone.utc).isoformat(), "values": values}
+        except OSError:
+            self._retry_after = monotonic() + self._interval
+            raise
+        finally:
+            self._matrix_task = None
+            self._matrix_after = monotonic() + MATRIX_READ_INTERVAL
+            self._next_read = monotonic() + MIN_READ_DELAY
+            self._wake.set()
 
     def subscribe(self, listener: Callable[[dict], None], *,
                   interval: float | None = None,
@@ -278,7 +331,7 @@ class AMiTMonitor:
             while self._listeners and not self._closed and self._extras:
                 now = monotonic()
                 delay = max(self._next_read, self._retry_after) - now
-                if self._normal_busy or delay > 0:
+                if self._normal_busy or self._matrix_task is not None or delay > 0:
                     await self._wait(max(MIN_READ_DELAY, delay))
                     continue
                 variable = self._next_variable(now)
@@ -319,6 +372,10 @@ class AMiTMonitor:
         self._refresh_schedule()
         self._samples.clear()
         self._wake.set()
+        if self._matrix_task is not None:
+            task = self._matrix_task
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         if self._task is not None:
             task = self._task
             task.cancel()

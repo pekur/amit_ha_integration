@@ -81,6 +81,73 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_preview_add)
     websocket_api.async_register_command(hass, websocket_confirm_add)
     websocket_api.async_register_command(hass, websocket_addition_status)
+    websocket_api.async_register_command(hass, websocket_matrix_read)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "amit/monitor/read_matrix",
+    vol.Required("entry_id"): str,
+    vol.Required("runtime_id"): str,
+    vol.Required("wid"): int,
+    vol.Required("revision"): int,
+    vol.Required("row"): int,
+    vol.Required("col"): int,
+    vol.Required("rows"): int,
+    vol.Required("cols"): int,
+})
+@websocket_api.require_admin
+@callback
+def websocket_matrix_read(hass, connection, msg) -> None:
+    """Read one catalog matrix window without changing configuration or polling."""
+    data = hass.data.get(DOMAIN, {}).get(msg["entry_id"], {})
+    monitor = data.get("monitor")
+    if monitor is None or monitor.closed:
+        connection.send_error(msg["id"], "not_found", "Requested PLC is not loaded")
+        return
+    # HA calls subscription cleanup when the socket closes. Register this
+    # temporary cancellation hook only for the duration of the one-shot read.
+    task = None
+    active = True
+
+    @callback
+    def cancel():
+        nonlocal active
+        active = False
+        if task is not None:
+            task.cancel()
+
+    connection.subscriptions[msg["id"]] = cancel
+
+    async def read():
+        try:
+            result = await monitor.read_matrix(
+                msg["runtime_id"], msg["wid"], msg["revision"],
+                msg["row"], msg["col"], msg["rows"], msg["cols"],
+            )
+        except asyncio.CancelledError:
+            if monitor.closed and active:
+                connection.send_error(msg["id"], "not_found", "Requested PLC was unloaded")
+            elif active:
+                raise
+        except ValueError as err:
+            connection.send_error(msg["id"], str(err), "Cannot read this matrix window")
+        except (OSError, RuntimeError):
+            connection.send_error(msg["id"], "read_error", "PLC matrix read failed")
+        else:
+            connection.send_result(msg["id"], result)
+        finally:
+            if connection.subscriptions.get(msg["id"]) is cancel:
+                connection.subscriptions.pop(msg["id"])
+
+    # Install cleanup before scheduling, including on HA versions whose tasks
+    # start on the next event-loop turn rather than eagerly.
+    coroutine = read()
+    try:
+        task = hass.async_create_background_task(coroutine, "AMiT matrix read")
+    except Exception:
+        coroutine.close()
+        connection.subscriptions.pop(msg["id"], None)
+        connection.send_error(msg["id"], "read_error", "Cannot schedule matrix read")
 
 
 @websocket_api.websocket_command({vol.Required("type"): "amit/monitor/list"})
