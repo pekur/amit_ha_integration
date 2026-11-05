@@ -132,7 +132,7 @@ def _encrypt_msg(msg: bytearray, password: int) -> None:
         pos += 1
 
 
-def _parse_response(data: bytes) -> Tuple[int, int, int, bytes]:
+def _parse_response(data: bytes, *, has_function: bool = True) -> Tuple[int, int, int, bytes]:
     """Validate and parse a DB-Net response frame.
 
     Frame layout and FCS: AMiT's DB-Net specification, sections Frame and Errors
@@ -157,7 +157,7 @@ def _parse_response(data: bytes) -> Tuple[int, int, int, bytes]:
     
     elif frame_type == 0x68:
         data_len = data[1]
-        if data_len < 4 or len(data) != data_len + 6:
+        if data_len < (4 if has_function else 3) or len(data) != data_len + 6:
             raise ValueError("Invalid long frame length")
         if data[2] != data_len or data[3] != 0x68:
             raise ValueError("Invalid long frame header")
@@ -166,7 +166,7 @@ def _parse_response(data: bytes) -> Tuple[int, int, int, bytes]:
         dest_addr = data[4]
         src_addr = data[5]
         fcb = data[6]
-        value_data = data[8:-2]
+        value_data = data[8 if has_function else 7:-2]
     
     else:
         raise ValueError(f"Unknown frame type: 0x{frame_type:02x}")
@@ -368,20 +368,23 @@ class AMiTClient:
         async with self._lock:
             return await self._send_receive_internal(payload)
     
-    def _validate_response(self, response: bytes, function: int) -> Tuple[int, bytes]:
+    def _validate_response(self, response: bytes, function: Optional[int]) -> Tuple[int, bytes]:
         """Check the response belongs to this station and requested function."""
-        dest, src, status, value_data = _parse_response(response)
+        dest, src, status, value_data = _parse_response(response, has_function=function is not None)
         if dest != (self.client_addr & 0x1F) or src != (self.station_addr & 0x1F):
             raise ValueError("Response addresses do not match request")
         if status in (0x00, 0x08):
-            if response[0] == 0x68:
+            if function is None:
+                if response[0] != 0x68 or len(value_data) != 96:
+                    raise ValueError("Invalid system identification response")
+            elif response[0] == 0x68:
                 if response[7] != (function | 0x80):
                     raise ValueError("Response function does not match request")
-            elif function in (0x01, 0x03):
+            elif function in (0x00, 0x01, 0x03):
                 raise ValueError("Read response contains no data")
         return status, value_data
 
-    def _decode_response(self, data: bytes, transaction_id: int, function: int) -> Tuple[int, int, bytes]:
+    def _decode_response(self, data: bytes, transaction_id: int, function: Optional[int]) -> Tuple[int, int, bytes]:
         """Validate the UDP envelope before accepting its key or payload."""
         if len(data) < 10:
             raise ValueError("UDP header too short")
@@ -417,14 +420,17 @@ class AMiTClient:
             header[14] = len(payload) - 6
             msg = header + bytearray(payload)
             _encrypt_msg(msg, self.password)
-            frame_cs = _calc_checksum(payload[4:4 + payload[1]])
+            # System identification is the only short request. Its FCS covers
+            # DA, SA and FCB rather than the long frame's DATA section.
+            short_request = payload[0] == 0x10
+            frame_cs = _calc_checksum(payload[1:4] if short_request else payload[4:4 + payload[1]])
             checksum = _randomize(self.password, transaction_id + self._key + frame_cs + 256)
             struct.pack_into('<I', msg, 10, checksum)
 
             future = asyncio.get_running_loop().create_future()
             protocol._response_future = future
             protocol._response_validator = lambda data: self._decode_response(
-                data, transaction_id, payload[7]
+                data, transaction_id, None if short_request else payload[7]
             )
             self._transaction_id = (transaction_id + 1) & 0xFFFFFFFF or 1
             try:
@@ -469,6 +475,33 @@ class AMiTClient:
         elif variable.var_type == VarType.FLOAT:
             return struct.unpack('<f', value_data[:4])[0]
     
+    async def read_application_identification(self) -> Tuple[str, str, str]:
+        """Read the three application identification fields (function 0)."""
+        body = bytes([self.station_addr & 0x1F, self.client_addr & 0x1F, 0x4D, 0x00])
+        frame = bytes([0x68, 4, 4, 0x68]) + body + bytes([_calc_checksum(body), 0x16])
+        return await self._read_identification(frame, 0x00)
+
+    async def read_system_identification(self) -> Tuple[str, str, str]:
+        """Read system text using the short 0x4E network-layer request.
+
+        Field meanings depend on the controller. Do not infer a hardware model
+        or firmware version from the position of a field alone.
+        """
+        body = bytes([self.station_addr & 0x1F, self.client_addr & 0x1F, 0x4E])
+        frame = bytes([0x10]) + body + bytes([_calc_checksum(body), 0x16])
+        return await self._read_identification(frame, None)
+
+    async def _read_identification(self, frame: bytes, function: Optional[int]) -> Tuple[str, str, str]:
+        response = await self._send_receive(frame)
+        status, data = self._validate_response(response, function)
+        if status not in (0x00, 0x08):
+            raise RuntimeError(f"PLC rejected identification read: status {status}")
+        if len(data) != 96:
+            raise RuntimeError("Identification response must contain 96 bytes")
+        # Preserve the first byte of the system text: there is no function byte.
+        return tuple(data[start:start + 32].split(b'\x00', 1)[0].rstrip(b' ').decode('latin-1')
+                     for start in (0, 32, 64))
+
     async def read_matrix_element(self, variable: Variable, row: int, col: int) -> int | float:
         """Read one matrix element. Row and column indexes start at zero."""
         values = await self._read_matrix_values(variable, row, col, 1, 1, block=False)

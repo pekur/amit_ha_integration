@@ -42,6 +42,11 @@ def short_frame(status=0, dest=31, src=4):
     return with_fcs(bytes([0x10, dest, src, status]))
 
 
+def system_id_frame(data, *, status=8, dest=31, src=4):
+    body = bytes([dest, src, status]) + data
+    return with_fcs(bytes([0x68, len(body), len(body), 0x68]) + body)
+
+
 class FrameTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -91,7 +96,9 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
         cls.protocol = load_protocol(cls)
 
     def setUp(self):
-        self.client = self.protocol.AMiTClient("plc.invalid", timeout=0.02)
+        # Manual delivery/cancellation tests must tolerate Windows scheduling.
+        # Tests that exercise expiry set their own short deadline.
+        self.client = self.protocol.AMiTClient("plc.invalid", timeout=1)
         self.udp = self.protocol.AMiTProtocol()
         self.transport = Mock()
         self.udp.connection_made(self.transport)
@@ -152,6 +159,7 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.transport.sendto.call_args.args[0], expected)
 
     async def test_stale_datagram_cannot_satisfy_next_request_after_timeout(self):
+        self.client.timeout = 0.02
         self.transport.sendto.side_effect = None
         with self.assertRaises(TimeoutError):
             await self.client.read_variable(self.variable)
@@ -193,6 +201,7 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.assert_waiter_cleared()
 
     async def test_invalid_only_reply_times_out_without_changing_key(self):
+        self.client.timeout = 0.02
         self.transport.sendto.side_effect = lambda request: self.deliver(b"malformed")
         with self.assertRaises(TimeoutError):
             await self.client.read_variable(self.variable)
@@ -475,6 +484,7 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.assert_waiter_cleared()
 
     async def test_matrix_rejects_unrelated_udp_reply_and_times_out_cleanly(self):
+        self.client.timeout = 0.02
         variable = self.protocol.Variable("Matrix", 4001, 3, rows=1, cols=1)
         self.transport.sendto.side_effect = lambda request: self.deliver(self.envelope(
             long_frame(function=0x83), self.tid(request),
@@ -482,6 +492,111 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TimeoutError):
             await self.client.read_matrix_element(variable, 0, 0)
         self.assert_waiter_cleared()
+
+    async def test_identification_fields_and_request_wire_layouts(self):
+        fields = (b'\x80Controller\x00ignored'.ljust(32, b' '), b'X' * 32, b'Verze\xe1'.ljust(32, b' '))
+        data = b''.join(fields)
+        for system in (False, True):
+            with self.subTest(system=system):
+                method = self.client.read_system_identification if system else self.client.read_application_identification
+                self.transport.sendto.side_effect = lambda request: self.deliver(self.envelope(
+                    system_id_frame(data) if system else long_frame(data, function=0x80), self.tid(request),
+                ))
+                result = await method()
+                self.assertEqual(result, ('\x80Controller', 'X' * 32, 'Verze\xe1'))
+                packet = bytearray(self.transport.sendto.call_args.args[0])
+                self.protocol._encrypt_msg(packet, self.client.password)
+                self.assertEqual(bytes(packet[15:]), bytes.fromhex(
+                    '10 04 1f 4e 71 16' if system else '68 04 04 68 04 1f 4d 00 70 16'))
+                self.assertEqual(packet[14], 0 if system else 4)
+                self.assert_waiter_cleared()
+
+    async def test_system_identification_sync_and_auth_checksum(self):
+        self.client.password = 12345
+        requests = []
+        def respond(request):
+            requests.append(request)
+            tid = self.tid(request)
+            key = struct.unpack_from('<I', request, 6)[0]
+            expected = self.protocol._randomize(self.client.password, tid + key + 0x71 + 256)
+            self.assertEqual(struct.unpack_from('<I', request, 10)[0], expected)
+            if len(requests) == 1:
+                self.deliver(self.sync(tid, 4321))
+            else:
+                self.assertEqual(key, 4321)
+                self.deliver(self.envelope(system_id_frame(b'A' * 96), tid))
+        self.transport.sendto.side_effect = respond
+        self.assertEqual(await self.client.read_system_identification(), ('A' * 32,) * 3)
+        self.assertEqual(len(requests), 2)
+        self.assertNotEqual(self.tid(requests[0]), self.tid(requests[1]))
+        self.assert_waiter_cleared()
+
+    async def test_system_identification_ignores_invalid_and_stale_datagrams(self):
+        good_frame = system_id_frame(b'Z' * 96)
+        def respond(request):
+            tid = self.tid(request)
+            corrupt = bytearray(good_frame); corrupt[-2] ^= 1
+            for packet in (
+                self.envelope(good_frame, tid + 1),
+                self.envelope(system_id_frame(b'Z' * 96, dest=30), tid),
+                self.envelope(system_id_frame(b'Z' * 96, src=3), tid),
+                self.envelope(bytes(corrupt), tid),
+                self.envelope(system_id_frame(b'Z' * 95), tid),
+                self.envelope(system_id_frame(b'Z' * 97), tid),
+                self.envelope(long_frame(b'Z' * 96), tid),
+                self.envelope(short_frame(), tid),
+            ):
+                self.deliver(packet)
+                self.assertFalse(self.udp._response_future.done())
+                self.assertEqual(self.client._key, 0)
+            self.deliver(self.envelope(good_frame, tid))
+        self.transport.sendto.side_effect = respond
+        self.assertEqual(await self.client.read_system_identification(), ('Z' * 32,) * 3)
+
+    async def test_identification_rejections_leave_scalar_reads_working(self):
+        for system in (False, True):
+            method = self.client.read_system_identification if system else self.client.read_application_identification
+            for status in (1, 2, 3):
+                self.transport.sendto.side_effect = lambda request: self.deliver(self.envelope(
+                    short_frame(status), self.tid(request),
+                ))
+                with self.assertRaises(RuntimeError):
+                    await method()
+                self.assert_waiter_cleared()
+            self.transport.sendto.side_effect = lambda request: self.deliver(self.envelope(
+                long_frame(), self.tid(request),
+            ))
+            self.assertEqual(await self.client.read_variable(self.variable), 123)
+
+    async def test_application_identification_validates_function_and_length(self):
+        self.client._send_receive = AsyncMock()
+        for frame in (long_frame(b'A' * 95, function=0x80), long_frame(b'A' * 97, function=0x80)):
+            self.client._send_receive.return_value = frame
+            with self.assertRaises(RuntimeError):
+                await self.client.read_application_identification()
+        for frame in (short_frame(), long_frame(b'A' * 96, function=0x81)):
+            self.client._send_receive.return_value = frame
+            with self.assertRaises(ValueError):
+                await self.client.read_application_identification()
+
+    async def test_system_identification_timeout_and_cancellation_release_transport(self):
+        self.client.timeout = 0.02
+        with self.assertRaises(TimeoutError):
+            await self.client.read_system_identification()
+        self.assert_waiter_cleared()
+        self.client.timeout = 1
+        sent = asyncio.Event()
+        self.transport.sendto.side_effect = lambda request: sent.set()
+        task = asyncio.create_task(self.client.read_system_identification())
+        await sent.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assert_waiter_cleared()
+        self.transport.sendto.side_effect = lambda request: self.deliver(self.envelope(
+            long_frame(), self.tid(request),
+        ))
+        self.assertEqual(await self.client.read_variable(self.variable), 123)
 
 
 if __name__ == "__main__":
