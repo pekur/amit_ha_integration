@@ -429,6 +429,66 @@ class MonitorTests(HAStubTestCase):
         self.assertEqual(self.client.read_variable.await_args.args[0].wid, self.extra.wid)
         self.assertEqual(self.client.read_matrix_block.await_count, 1)
 
+    async def test_matrix_gets_next_slot_during_continuous_catalog_polling(self):
+        variables = [self.protocol.Variable(f"Scalar{i}", i, self.protocol.VarType.INT16)
+                     for i in range(10, 60)]
+        matrix = self.protocol.Variable("Matrix", 3, self.protocol.VarType.MATRIX_INT16, rows=1, cols=1)
+        self.client.read_matrix_block = AsyncMock(return_value=[[1]])
+        monitor = self.monitor(variables + [matrix], [], interval=30)
+        unsubscribe = monitor.subscribe(Mock())
+        await self.next_read()
+        # The worker has just set the inter-read delay. This used to return
+        # busy on every attempt while a larger catalog was being scanned.
+        revision = monitor.snapshot()["variables"][-1]["revision"]
+        result = await asyncio.wait_for(
+            monitor.read_matrix(monitor.runtime_id, 3, revision, 0, 0, 1, 1), 1)
+        self.assertEqual(result["values"], [[1]])
+        self.assertEqual(self.client.read_variable.await_count, 1)
+        await self.next_read(2)  # Scalar polling resumes after the matrix read.
+        unsubscribe()
+
+    async def test_reserved_matrix_waits_for_inflight_scalar_and_its_delay(self):
+        matrix = self.protocol.Variable("Matrix", 3, self.protocol.VarType.MATRIX_INT16, rows=1, cols=1)
+        entered, release = asyncio.Event(), asyncio.Event()
+        finished, started = [], []
+        async def scalar_read(variable):
+            entered.set()
+            await release.wait()
+            finished.append(self.module.monotonic())
+            return 1
+        async def matrix_read(*args):
+            started.append(self.module.monotonic())
+            return [[1]]
+        self.client.read_variable.side_effect = scalar_read
+        self.client.read_matrix_block = AsyncMock(side_effect=matrix_read)
+        monitor = self.monitor([self.extra, matrix], [])
+        unsubscribe = monitor.subscribe(Mock())
+        await entered.wait()
+        revision = monitor.snapshot()["variables"][-1]["revision"]
+        task = asyncio.create_task(monitor.read_matrix(monitor.runtime_id, 3, revision, 0, 0, 1, 1))
+        await asyncio.sleep(0)
+        self.client.read_matrix_block.assert_not_awaited()
+        with self.assertRaisesRegex(ValueError, "busy"):
+            await monitor.read_matrix(monitor.runtime_id, 3, revision, 0, 0, 1, 1)
+        release.set()
+        await asyncio.wait_for(task, 1)
+        unsubscribe()
+        self.assertGreaterEqual(started[0] - finished[0], self.module.MIN_READ_DELAY)
+
+    async def test_normal_polling_can_take_priority_while_matrix_waits(self):
+        matrix = self.protocol.Variable("Matrix", 3, self.protocol.VarType.MATRIX_INT16, rows=1, cols=1)
+        self.client.read_matrix_block = AsyncMock(return_value=[[1]])
+        monitor = self.monitor([matrix], [])
+        monitor._next_read = self.module.monotonic() + .02
+        revision = monitor.snapshot()["variables"][0]["revision"]
+        task = asyncio.create_task(monitor.read_matrix(monitor.runtime_id, 3, revision, 0, 0, 1, 1))
+        await asyncio.sleep(0)
+        with monitor.normal_reads():
+            await asyncio.sleep(.25)
+            self.client.read_matrix_block.assert_not_awaited()
+        result = await asyncio.wait_for(task, 1)
+        self.assertEqual(result["values"], [[1]])
+
     async def test_old_read_is_ignored_after_last_unsubscribe_and_resubscribe(self):
         monitor = self.monitor()
         release = asyncio.Event()

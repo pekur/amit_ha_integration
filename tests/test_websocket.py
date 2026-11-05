@@ -272,6 +272,43 @@ class WebSocketTests(HAStubTestCase):
         self.client.read_matrix_block.assert_not_awaited()
         self.assertIsNone(self.monitor._matrix_task)
 
+    async def test_matrix_waiting_for_slot_cancels_on_disconnect_or_unload(self):
+        for unload in (False, True):
+            if unload:
+                # Ignore the previous request's cooldown to test unload while waiting.
+                self.monitor._matrix_after = 0
+            message = self.matrix_setup()
+            self.monitor._next_read = self.monitor_module.monotonic() + 10
+            task = asyncio.create_task(self.matrix_read(message))
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            self.assertIsNotNone(self.monitor._matrix_task)
+            if unload:
+                await self.monitor.async_close()
+            else:
+                self.connection.subscriptions[message["id"]]()
+            await task
+            self.client.read_matrix_block.assert_not_awaited()
+            self.assertIsNone(self.monitor._matrix_task)
+            self.assertEqual(self.connection.subscriptions, {})
+
+    async def test_matrix_waiting_for_slot_rechecks_catalog_and_recovery(self):
+        for recovery in (False, True):
+            self.monitor._matrix_after = 0
+            message = self.matrix_setup()
+            self.monitor._next_read = self.monitor_module.monotonic() + .02
+            task = asyncio.create_task(self.matrix_read(message))
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            if recovery:
+                self.monitor._retry_after = self.monitor_module.monotonic() + 30
+            else:
+                self.monitor.update_catalog([self.variable])
+            await asyncio.wait_for(task, 1)
+            self.assertEqual(self.connection.send_error.call_args.args[1],
+                             "busy" if recovery else "stale_selection")
+            self.client.read_matrix_block.assert_not_awaited()
+
     async def test_matrix_schedule_failure_releases_connection_cleanup(self):
         message = self.matrix_setup()
         with patch.object(self.hass, "async_create_background_task", side_effect=RuntimeError):

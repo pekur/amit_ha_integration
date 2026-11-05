@@ -65,6 +65,7 @@ class AMiTMonitor:
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._matrix_task: asyncio.Task | None = None
+        self._extra_reading = False
         self._matrix_after = 0.0
         self._due: dict[int, float] = {}
         self._next_read = 0.0
@@ -125,10 +126,23 @@ class AMiTMonitor:
                 or row + rows > variable.rows or col + cols > variable.cols):
             raise ValueError("invalid_request")
         if (self._matrix_task is not None or self._normal_busy
-                or monotonic() < max(self._matrix_after, self._next_read, self._retry_after)):
+                or monotonic() < max(self._matrix_after, self._retry_after)):
             raise ValueError("busy")
         self._matrix_task = asyncio.current_task()
         try:
+            # Reserve one slot before waiting. The extra worker yields to this
+            # request, but an in-flight read and normal HA polling finish first.
+            while True:
+                if self._closed:
+                    raise ValueError("not_found")
+                if self._revisions.get(wid) != revision:
+                    raise ValueError("stale_selection")
+                if monotonic() < self._retry_after:
+                    raise ValueError("busy")
+                delay = self._next_read - monotonic()
+                if not self._extra_reading and not self._normal_busy and delay <= 0:
+                    break
+                await asyncio.sleep(max(MIN_READ_DELAY, delay))
             values = await self._client.read_matrix_block(variable, row, col, rows, cols)
             if self._closed:
                 raise ValueError("not_found")
@@ -344,6 +358,7 @@ class AMiTMonitor:
                 failed = False
                 connection_failed = False
                 value = None
+                self._extra_reading = True
                 try:
                     value = await self._client.read_variable(variable)
                 except Exception as err:
@@ -352,6 +367,7 @@ class AMiTMonitor:
                     # A PLC rejection or invalid value affects only this WID.
                     connection_failed = isinstance(err, OSError)
                 finally:
+                    self._extra_reading = False
                     self._next_read = monotonic() + MIN_READ_DELAY
                 # Ignore an old session or a catalog replaced during the read.
                 if (epoch == self._epoch
