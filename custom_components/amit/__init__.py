@@ -40,6 +40,7 @@ from .targets import get_target
 from .protocol import AMiTClient, Variable, VarType
 from .monitor import AMiTMonitor
 from .frontend import async_setup_frontend, async_update_panel
+from .entity import format_identification
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -284,6 +285,20 @@ async def _async_setup_connected_entry(
     
     # Fetch initial data
     await coordinator.async_config_entry_first_refresh()
+
+    # Optional, read-only metadata. Do not add identification to regular polling.
+    fields = {}
+    for kind in ("system", "application"):
+        try:
+            fields[kind] = await getattr(client, f"read_{kind}_identification")()
+        except OSError:
+            _LOGGER.debug("PLC identification is unavailable")
+            break  # Do not add more traffic after a transport failure.
+        except (ValueError, RuntimeError):
+            _LOGGER.debug("PLC does not provide %s identification", kind)
+        if kind == "system":
+            await asyncio.sleep(0.2)
+    identification = format_identification(**fields)
     
     configured_writable_wids = {str(w) for w in entry.data.get(CONF_WRITABLE_VARIABLES, [])}
 
@@ -292,6 +307,7 @@ async def _async_setup_connected_entry(
         "client": client,
         "coordinator": coordinator,
         "monitor": monitor,
+        "identification": identification,
         "variables": variables,
         "variables_by_wid": variables_by_wid,
         "variables_by_name": variables_by_name,

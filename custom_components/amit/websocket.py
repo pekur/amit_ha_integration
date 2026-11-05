@@ -160,8 +160,10 @@ def websocket_list(hass, connection, msg) -> None:
         monitor = data.get("monitor")
         if monitor is not None and not monitor.closed:
             entry = hass.config_entries.async_get_entry(entry_id)
-            entries.append({"entry_id": entry_id,
-                            "title": entry.title if entry else "AMiT PLC"})
+            item = {"entry_id": entry_id, "title": entry.title if entry else "AMiT PLC"}
+            if identification := data.get("identification"):
+                item["identification"] = identification
+            entries.append(item)
     connection.send_result(msg["id"], entries)
 
 

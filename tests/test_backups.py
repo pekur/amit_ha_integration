@@ -124,6 +124,8 @@ class HAStubTestCase(unittest.IsolatedAsyncioTestCase):
             ),
             "homeassistant.helpers": module(
                 "homeassistant.helpers", selector=selectors, entity_registry=registry,
+                device_registry=SimpleNamespace(async_get=lambda hass: SimpleNamespace(
+                    async_get_device=lambda **kwargs: None)),
             ),
             "homeassistant.helpers.entity_platform": module(
                 "homeassistant.helpers.entity_platform", AddEntitiesCallback=object,

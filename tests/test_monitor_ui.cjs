@@ -41,6 +41,10 @@ async function mount(browser, options = {}) {
     if (options.matrix) Object.assign(variables[5], {
       type: "Matrix Integer", matrix_readable: true, rows: 12, cols: 8,
     });
+    if (options.identification) fixture.entries[0].identification = {
+      system: ["AMiT", "AMiDemo2-X - NOS999 - CIP Test", "V1.20 - V3.40 - V5.60"],
+      application: ['<img src="invalid" onerror="window.injected=true">', "", "Build 1"],
+    };
     fixture.reading = (wid, value, status = "ok") => ({
       wid, value, status, sequence: ++fixture.sequence,
       revision: fixture.variables.find(v => v.wid === wid)?.revision,
@@ -146,6 +150,32 @@ async function run() {
   const browser = await chromium.launch({ headless: true, ...(process.env.AMIT_CHROME_PATH ? { executablePath: process.env.AMIT_CHROME_PATH } : {}) });
   const results = [];
   try {
+    {
+      const { page, errors, requests } = await mount(browser, { identification: true });
+      const header = page.locator(".identification");
+      await header.getByText("Kontrolér:", { exact: false }).waitFor();
+      assert.match(await header.textContent(), /AMiDemo2-X.*NOS999.*CIP Test.*V1.20.*V3.40.*V5.60/);
+      assert.match(await header.textContent(), /<img src=/);
+      for (const dark of [false, true]) {
+        await theme(page, dark);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.waitForTimeout(150);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        if (process.env.AMIT_SCREENSHOT_DIR) await page.screenshot({
+          path: path.join(process.env.AMIT_SCREENSHOT_DIR, `identification-mobile-${dark ? "dark" : "light"}.png`), fullPage: true,
+        });
+      }
+      await page.evaluate(() => { panel.hass = { ...panel._hass, language: "en" }; });
+      await header.getByText("Controller:", { exact: false }).waitFor();
+      await page.getByRole("combobox", { name: "PLC", exact: true }).selectOption("second");
+      await page.waitForFunction(() => panel.shadowRoot.querySelector(".identification").hidden);
+      assert.equal(await header.textContent(), "");
+      assert.equal(await page.evaluate(() => fixture.messages.some(m => /identification/.test(m.type))), false);
+      assert.equal(await page.evaluate(() => window.injected), undefined);
+      assert.deepEqual(errors, []); assert.deepEqual(requests, []);
+      results.push("identification header includes system/application text, safe rendering, entry isolation, languages and mobile themes without PLC requests");
+      await page.close();
+    }
     {
       const { page, errors, requests } = await mount(browser, { matrix: true });
       const dialog = page.locator(".matrix-dialog");

@@ -23,6 +23,45 @@ class ProfileEntityTests(HAStubTestCase):
             writable=writable,
         )
 
+    async def test_identification_updates_device_info_for_all_platforms_and_buttons(self):
+        entity_module = importlib.import_module("_amit_backup_tests.entity")
+        identification = entity_module.format_identification(
+            ("AMiT", "AMiDemo2-X - NOS999 - CIP Test", "V1.20 - V3.40 - V5.60"),
+            ("App\x01 name", "", "Build 1"))
+        entry = SimpleNamespace(entry_id="entry", data={"host": "plc.invalid"})
+        hass = SimpleNamespace(data={"amit": {"entry": {"identification": identification}}})
+        coordinator = SimpleNamespace(hass=hass, data={1: 1})
+        client = SimpleNamespace()
+        for platform, class_name in (("sensor", "AMiTSensor"), ("number", "AMiTNumber"),
+                                     ("switch", "AMiTSwitch"), ("binary_sensor", "AMiTBinarySensor")):
+            args = [coordinator] + ([client] if platform in ("number", "switch") else [])
+            entity = getattr(self.platforms[platform], class_name)(*args, self.variable("Value", 1), entry)
+            info = entity._attr_device_info
+            self.assertEqual(info["identifiers"], {("amit", "entry")})
+            self.assertEqual(info["model"], "AMiDemo2-X")
+            self.assertIn("NOS999", info["sw_version"])
+            self.assertIn("V1.20 - V3.40 - V5.60", info["sw_version"])
+            self.assertNotIn("hw_version", info)
+        for button in (self.button_module.AMiTExportButton, self.button_module.AMiTReloadButton):
+            self.assertEqual(button(hass, entry)._attr_device_info, info)
+        self.assertEqual(identification["application"][0], "App name")
+
+    async def test_unrecognized_identity_and_failed_refresh_keep_registry_metadata(self):
+        entity_module = importlib.import_module("_amit_backup_tests.entity")
+        self.assertNotIn("model", entity_module.format_identification(("Other vendor", "AMiDemo2-X", "v1")))
+        self.assertNotIn("model", entity_module.format_identification(("AMiT", "Unknown controller", "v1")))
+        entry = SimpleNamespace(entry_id="entry", data={"host": "plc.invalid"})
+        hass = SimpleNamespace(data={"amit": {"entry": {"identification": {}}}})
+        registry = SimpleNamespace(async_get_device=Mock(return_value=SimpleNamespace(
+            model="Known model", sw_version="Known firmware", name_by_user="My device")))
+        with patch.object(entity_module.dr, "async_get", return_value=registry):
+            info = entity_module.get_device_info(entry, hass)
+        self.assertEqual(info["model"], "Known model")
+        self.assertEqual(info["sw_version"], "Known firmware")
+        self.assertEqual(info["name"], "AMiT PLC (plc.invalid)")
+        registry.async_get_device.assert_called_once_with(identifiers={("amit", "entry")})
+        self.assertNotIn("name_by_user", info)
+
     async def entities(self, variables, writable=(), *, profile="generic", values=None):
         entry_data = {"host": "plc.invalid"}
         if profile is not None:

@@ -19,6 +19,7 @@ class UpdateFailed(Exception):
 
 class CoordinatorStub:
     def __init__(self, hass, logger, *, name, update_method, update_interval):
+        self.hass = hass
         self.update_method = update_method
         self.data = None
         self.listeners = {}
@@ -76,6 +77,8 @@ class SetupTests(HAStubTestCase):
             disconnect=AsyncMock(),
             load_variables=AsyncMock(return_value=[self.variable]),
             read_variable=AsyncMock(return_value=123),
+            read_system_identification=AsyncMock(return_value=None),
+            read_application_identification=AsyncMock(return_value=None),
         )
         context = patch.object(self.integration, "AMiTClient", return_value=self.client)
         context.start()
@@ -85,6 +88,47 @@ class SetupTests(HAStubTestCase):
         self.client.disconnect.assert_awaited_once()
         self.assertEqual(self.hass.data["amit"], {"other_entry": self.other_entry})
         self.hass.services.async_register.assert_not_called()
+
+    async def test_identification_is_read_once_without_changing_entry_or_polling(self):
+        original = dict(self.entry.data)
+        self.client.read_system_identification.return_value = (
+            "AMiT", "AMiDemo2-X - NOS999 - CIP Test", "V1.20 - V3.40 - V5.60")
+        self.client.read_application_identification.return_value = ("Test application", "", "Build 1")
+        await self.integration.async_setup_entry(self.hass, self.entry)
+        data = self.hass.data["amit"][self.entry.entry_id]
+        self.assertEqual(data["identification"]["model"], "AMiDemo2-X")
+        self.assertIn("NOS999", data["identification"]["sw_version"])
+        self.assertIn("V5.60", data["identification"]["sw_version"])
+        await data["coordinator"].update_method()
+        self.client.read_system_identification.assert_awaited_once()
+        self.client.read_application_identification.assert_awaited_once()
+        self.assertEqual(self.entry.data, original)
+        self.assertIs(self.hass.data["amit"]["other_entry"], self.other_entry)
+        await self.integration.async_unload_entry(self.hass, self.entry)
+
+    async def test_optional_identification_failure_does_not_block_setup(self):
+        for error in (RuntimeError("unsupported"), ValueError("invalid"), TimeoutError("offline")):
+            with self.subTest(error=type(error).__name__):
+                self.client.read_system_identification.reset_mock()
+                self.client.read_application_identification.reset_mock()
+                self.client.read_system_identification.side_effect = error
+                self.client.read_application_identification.return_value = ("App", "", "")
+                self.assertTrue(await self.integration.async_setup_entry(self.hass, self.entry))
+                data = self.hass.data["amit"][self.entry.entry_id]
+                self.assertEqual(data["coordinator"].data, {4001: 123})
+                if isinstance(error, OSError):
+                    self.client.read_application_identification.assert_not_awaited()
+                else:
+                    self.assertEqual(data["identification"]["application"], ["App", "", ""])
+                await self.integration.async_unload_entry(self.hass, self.entry)
+
+    async def test_identification_cancellation_cleans_up_without_platform_setup(self):
+        self.client.read_system_identification.side_effect = asyncio.CancelledError()
+        with self.assertRaises(asyncio.CancelledError):
+            await self.integration.async_setup_entry(self.hass, self.entry)
+        self.assert_clean_failure()
+        self.client.read_application_identification.assert_not_awaited()
+        self.hass.config_entries.async_forward_entry_setups.assert_not_awaited()
 
     async def test_failed_connection_retries_without_starting_platforms(self):
         self.client.connect.return_value = False

@@ -51,6 +51,7 @@ export const TRANSLATIONS = {
     matrixLoading: "Reading matrix…", matrixError: "Unable to read the window. Try refreshing it.",
     matrixBusy: "The PLC is busy. Try refreshing the window shortly.",
     matrixStale: "The matrix definition changed. Close this window and open the matrix again.",
+    systemIdentification: "Controller", applicationIdentification: "Application",
   },
   cs: {
     title: "AMiT Monitor", plc: "PLC", variables: "Proměnné", trends: "Sledování v čase",
@@ -103,6 +104,7 @@ export const TRANSLATIONS = {
     matrixLoading: "Načítání matice…", matrixError: "Výřez se nepodařilo načíst. Zkuste jej obnovit.",
     matrixBusy: "PLC je zaneprázdněné. Zkuste výřez za chvíli obnovit.",
     matrixStale: "Definice matice se změnila. Zavřete okno a matici znovu otevřete.",
+    systemIdentification: "Kontrolér", applicationIdentification: "Aplikace",
   },
 };
 
@@ -254,6 +256,7 @@ const STYLE = `
 *{box-sizing:border-box}h1,h2,p{margin:0}h1{font-size:22px;font-weight:500}h2{font-size:16px;font-weight:500}
 header{padding:20px 24px;background:var(--card-background-color,#fff);border-bottom:1px solid var(--divider-color,#dce4eb)}
 .heading,.meta,.section-head,.actions,.pager,.chart-head{display:flex;align-items:center;flex-wrap:wrap;gap:10px}.heading{margin-bottom:14px}.meta{gap:12px 20px}.muted{color:var(--secondary-text-color,#526775)}.small{font-size:12px}.number{font-variant-numeric:tabular-nums}
+.identification{margin-top:12px;overflow-wrap:anywhere}.identification p+p{margin-top:4px}
 button,input,select{font:inherit;color:inherit}button,select,input[type=search]{border:1px solid var(--divider-color,#dce4eb);border-radius:7px;background:var(--card-background-color,#fff);padding:8px 10px;max-width:100%;min-width:0}button{cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px}button:hover{background:var(--secondary-background-color,#eef3f7)}button:disabled{opacity:.5;cursor:default}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--primary-color,#007eaa);outline-offset:2px}button[aria-pressed=true]{background:var(--secondary-background-color,#eef3f7);border-color:var(--primary-color,#007eaa)}ha-icon{--mdc-icon-size:20px;width:20px;height:20px}label{max-width:100%}.menu{border:0;padding:8px}.meta select{max-width: min(100%,360px)}
 .columns{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(0,1fr);align-items:start;gap:18px;padding:20px}.section{min-width:0;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#dce4eb);border-radius:12px;overflow:hidden}.section-head{padding:16px;justify-content:space-between}.tools,.actions{padding:0 16px 14px}.tools{display:flex;flex-wrap:wrap;gap:8px}.tools input{width:100%}.pager{padding:12px 16px;justify-content:space-between;border-top:1px solid var(--divider-color,#dce4eb)}.pager[hidden]{display:none}.pager button{padding:5px 9px}
 table{width:100%;border-collapse:collapse}th{text-align:left;font-size:12px;font-weight:400;color:var(--secondary-text-color,#526775);background:var(--primary-background-color,#f5f7fa);padding:9px 10px}td{border-top:1px solid var(--divider-color,#dce4eb);padding:12px 10px;vertical-align:middle}td:first-child,th:first-child{width:42px;padding:0}td:first-child label{display:flex;align-items:center;justify-content:center;min-height:44px;min-width:42px}td:last-child,th:last-child{text-align:right}.name{display:block;overflow-wrap:anywhere;font-weight:500}.value{white-space:nowrap}input[type=checkbox]{width:18px;height:18px;accent-color:var(--primary-color,#007eaa)}tr.selected{background:color-mix(in srgb,var(--primary-color,#007eaa) 9%,var(--card-background-color,#fff))}.error{color:var(--error-color,#a12836)}.changed .value{animation:changed 1s ease-out}@keyframes changed{from{background:color-mix(in srgb,var(--primary-color,#007eaa) 25%,transparent)}to{background:transparent}}
@@ -575,7 +578,7 @@ export class AMiTMonitorPanel extends HTMLElement {
       <div class="meta"><label><span data-text="plc"></span> <select class="plcs" data-label="plc"></select></label>
       <span class="status" role="status"><span class="status-dot"></span><span class="status-text"></span></span>
       <button type="button" class="refresh" data-label="refresh"><ha-icon icon="mdi:refresh"></ha-icon></button>
-      <span class="last-read muted small"></span></div></header>
+      <span class="last-read muted small"></span></div><div class="identification small muted" hidden></div></header>
       <section class="interval-settings" data-label="readInterval"><form class="interval-controls" novalidate>
       <label><span data-text="readInterval"></span><input class="read-interval" type="number" min="1" max="120" step="any" required data-label="readInterval" aria-describedby="interval-help interval-error"></label>
       <label><span data-text="intervalScope"></span><select class="interval-scope" data-label="intervalScope"><option value="all" data-text="intervalAll"></option><option value="selected" data-text="intervalSelected"></option></select></label>
@@ -748,6 +751,15 @@ export class AMiTMonitorPanel extends HTMLElement {
     let latestTime;
     for (const sample of this.model.latest.values()) if (!latestTime || sample.timestamp > latestTime) latestTime = sample.timestamp;
     find(".last-read").textContent = `${this._t("lastRead")}: ${this._time(latestTime)}`;
+    const identification = this._entries.find(entry => entry.entry_id === this._entryId)?.identification;
+    const lines = [];
+    for (const [key, label] of [["system", "systemIdentification"], ["application", "applicationIdentification"]]) {
+      const fields = identification?.[key];
+      if (Array.isArray(fields) && fields.some(field => typeof field === "string" && field))
+        lines.push(node("p", "", `${this._t(label)}: ${fields.filter(field => typeof field === "string" && field).join(" · ")}`));
+    }
+    find(".identification").replaceChildren(...lines);
+    find(".identification").hidden = !lines.length || this._unavailable;
     const pause = find(".pause");
     pause.textContent = this._t(this._paused ? "resume" : "pause");
     pause.setAttribute("aria-pressed", String(this._paused));

@@ -57,7 +57,7 @@ class AMiTExportButton(ButtonEntity):
         self._attr_unique_id = f"{entry.entry_id}_export_config"
         self._attr_name = "Export Configuration"
         self._attr_icon = "mdi:download"
-        self._attr_device_info = get_device_info(entry)
+        self._attr_device_info = get_device_info(entry, hass)
 
     async def async_press(self) -> None:
         """Handle button press - export configuration."""
@@ -180,7 +180,7 @@ class AMiTReloadButton(ButtonEntity):
         self._attr_unique_id = f"{entry.entry_id}_reload_variables"
         self._attr_name = "Reload Variables"
         self._attr_icon = "mdi:refresh"
-        self._attr_device_info = get_device_info(entry)
+        self._attr_device_info = get_device_info(entry, hass)
 
     async def async_press(self) -> None:
         """Handle button press - reload variables from PLC."""

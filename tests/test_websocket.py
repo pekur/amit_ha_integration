@@ -396,6 +396,15 @@ class WebSocketTests(HAStubTestCase):
         self.websocket.websocket_list(self.hass, self.connection, {"id": 2})
         self.assertEqual(self.connection.send_result.call_args.args[1], [])
 
+    async def test_list_includes_only_its_entry_identification_without_new_reads(self):
+        identification = {"system": ["AMiT", "Synthetic model", "Synthetic version"]}
+        self.hass.data["amit"]["first"]["identification"] = identification
+        self.websocket.websocket_list(self.hass, self.connection, {"id": 1})
+        self.assertEqual(self.connection.send_result.call_args.args[1], [
+            {"entry_id": "first", "title": "Test PLC", "identification": identification}])
+        self.client.read_variable.assert_not_awaited()
+        self.assertNotIn("private-secret", json.dumps(self.connection.send_result.call_args.args[1]))
+
     async def test_unknown_plc_does_not_fall_back_to_loaded_one(self):
         self.subscribe(entry_id="missing")
         self.connection.send_error.assert_called_once_with(
