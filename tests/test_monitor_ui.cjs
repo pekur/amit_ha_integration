@@ -29,7 +29,7 @@ async function mount(browser, options = {}) {
       { wid: 4201, name: "Zad_UT1", type: "Float", unit: "°C", revision: 3, readable: true },
       { wid: 4301, name: "Zap_cerpadlo", type: "Int", unit: null, revision: 4, readable: true },
       { wid: 4401, name: "Provozni_hodiny", type: "Long", unit: null, revision: 5, readable: true },
-      { wid: 4501, name: "Program_tydne", type: "Array", unit: null, revision: 6, readable: false },
+      { wid: 4501, name: "Program_tydne", type: "Matrix Integer", unit: null, revision: 6, readable: false },
       { wid: 0, name: '<img src="bad" onerror="window.injected=true">', type: "Int", unit: null, revision: 7, readable: true },
     ];
     const fixture = window.fixture = {
@@ -179,6 +179,9 @@ async function run() {
     {
       const { page, errors, requests } = await mount(browser, { matrix: true });
       const dialog = page.locator(".matrix-dialog");
+      const expectedTypes = ["all", "Float", "Int", "Long", "Matrix Integer", "Matrix Long", "Matrix Float", "Unknown"];
+      assert.deepEqual(await page.locator(".filter option").evaluateAll(options => options.map(option => option.value)), expectedTypes);
+      assert.deepEqual(await page.locator(".filter option").allTextContents(), ["Všechny typy", ...expectedTypes.slice(1)]);
       assert.equal(await page.evaluate(() => fixture.messages.filter(m => m.type === "amit/monitor/read_matrix").length), 0);
       await select(page, "TE_obyvak");
       const history = await page.evaluate(() => JSON.stringify([...panel.model.selected]));
@@ -223,6 +226,8 @@ async function run() {
       }
       await page.evaluate(() => { panel.hass = { ...panel._hass, language: "en" }; });
       await dialog.getByRole("button", { name: "Refresh window", exact: true }).waitFor();
+      assert.deepEqual(await page.locator(".filter option").evaluateAll(options => options.map(option => option.value)), expectedTypes);
+      assert.deepEqual(await page.locator(".filter option").allTextContents(), ["All types", ...expectedTypes.slice(1)]);
       await page.keyboard.press("Escape");
       await page.waitForFunction(() => panel._matrix === null);
       await page.getByRole("combobox", { name: "Variable type", exact: true }).selectOption("Matrix Integer");

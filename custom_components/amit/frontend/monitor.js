@@ -673,7 +673,7 @@ export class AMiTMonitorPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-text]").forEach(e => { e.textContent = this._t(e.dataset.text); });
     this.shadowRoot.querySelectorAll("[data-label]").forEach(e => { e.setAttribute("aria-label", this._t(e.dataset.label)); });
     this._search.placeholder = this._t("search");
-    this._filter.replaceChildren(...["all", "Float", "Int", "Long", "Matrix Integer", "Matrix Long", "Matrix Float", "Array", "TimeArray", "Structure", "Unknown"].map(value => {
+    this._filter.replaceChildren(...["all", "Float", "Int", "Long", "Matrix Integer", "Matrix Long", "Matrix Float", "Unknown"].map(value => {
       const option = node("option", "", value === "all" ? this._t("allTypes") : value);
       option.value = value;
       return option;
