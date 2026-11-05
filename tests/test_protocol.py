@@ -374,6 +374,115 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(variable.rows)
         self.assertIsNone(variable.metadata_version)
 
+    async def test_matrix_elements_and_windows_use_typed_reads_and_row_order(self):
+        for typ, fmt, numbers in (
+            (3, 'h', [-32768, -1, 0, 32767, 12, -12]),
+            (4, 'i', [-2147483648, -1, 0, 2147483647, 123456, -123456]),
+            (5, 'f', [-2.5, 0, 0.25, 32.5, 1.5, -1.5]),
+        ):
+            with self.subTest(typ=typ):
+                variable = self.protocol.Variable("Matrix", 0x1234, typ, writable=False,
+                                                  rows=5, cols=7)
+                for block in (False, True):
+                    values = numbers if block else numbers[:1]
+                    self.transport.sendto.side_effect = lambda request: self.deliver(self.envelope(
+                        long_frame(struct.pack('<' + fmt * len(values), *values)), self.tid(request),
+                    ))
+                    if block:
+                        result = await self.client.read_matrix_block(variable, 1, 2, 2, 3)
+                        self.assertEqual(result, [numbers[:3], numbers[3:]])
+                    else:
+                        self.assertEqual(await self.client.read_matrix_element(variable, 4, 6), numbers[0])
+                    # Decrypt the sent packet and compare to an independently
+                    # assembled layout/FCS, including nonzero row/column offsets.
+                    packet = bytearray(self.transport.sendto.call_args.args[0])
+                    self.protocol._encrypt_msg(packet, self.client.password)
+                    expected = (bytes.fromhex('68 0f 0f 68 04 1f 4d 01')
+                                + bytes([0x20 + typ - 3])
+                                + bytes.fromhex('34 12 01 00 02 00 02 00 03 00')) if block else (
+                                    bytes.fromhex('68 0b 0b 68 04 1f 4d 01')
+                                    + bytes([0x10 + typ - 3])
+                                    + bytes.fromhex('34 12 04 00 06 00'))
+                    self.assertEqual(bytes(packet[15:]), with_fcs(expected))
+                    self.assert_waiter_cleared()
+
+    async def test_matrix_block_accepts_exact_protocol_limits(self):
+        for typ, fmt, count in ((3, 'h', 120), (4, 'i', 60), (5, 'f', 60)):
+            with self.subTest(typ=typ):
+                variable = self.protocol.Variable("Matrix", 65535, typ, rows=1, cols=65535)
+                self.transport.sendto.side_effect = lambda request: self.deliver(self.envelope(
+                    long_frame(struct.pack('<' + fmt * count, *range(count))), self.tid(request),
+                ))
+                self.assertEqual(await self.client.read_matrix_block(variable, 0, 65535-count, 1, count),
+                                 [list(range(count))])
+
+    async def test_invalid_matrix_requests_never_reach_transport(self):
+        variable = self.protocol.Variable("Matrix", 4001, 3, rows=20, cols=20)
+        for row, col, rows, cols in (
+            (-1, 0, 1, 1), (0, -1, 1, 1), (20, 0, 1, 1), (0, 20, 1, 1),
+            (19, 0, 2, 1), (0, 19, 1, 2), (0, 0, 0, 1), (0, 0, 1, 0),
+            (0, 0, -1, 1), (0, 0, 11, 11), (0, 0, True, 1),
+            (True, 0, 1, 1), (0, False, 1, 1), (0, 0, 1, 1.0), ("0", 0, 1, 1),
+        ):
+            with self.subTest(window=(row, col, rows, cols)):
+                with self.assertRaises(ValueError):
+                    await self.client.read_matrix_block(variable, row, col, rows, cols)
+        for kwargs in (
+            {"var_type": 0}, {"var_type": 1}, {"var_type": 2}, {"var_type": 6}, {"var_type": 7},
+            {"rows": None}, {"cols": 0}, {"rows": 65536}, {"cols": True},
+            {"wid": -1}, {"wid": 65536}, {"wid": True},
+        ):
+            bad = self.protocol.Variable(**{
+                "name": "Bad", "wid": 4001, "var_type": 3, "rows": 20, "cols": 20, **kwargs,
+            })
+            with self.subTest(metadata=kwargs):
+                with self.assertRaises(ValueError):
+                    await self.client.read_matrix_element(bad, 0, 0)
+        for typ in (4, 5):
+            variable.var_type = typ
+            with self.assertRaises(ValueError):
+                await self.client.read_matrix_block(variable, 0, 0, 1, 61)
+        self.transport.sendto.assert_not_called()
+
+    async def test_matrix_errors_and_wrong_lengths_do_not_return_partial_values(self):
+        variable = self.protocol.Variable("Matrix", 4001, 3, rows=2, cols=3)
+        for response in (
+            short_frame(status=1), short_frame(status=2), short_frame(status=3),
+            long_frame(status=2), long_frame(b''), long_frame(b'\x00' * 11),
+            long_frame(b'\x00' * 13),
+        ):
+            with self.subTest(response=response.hex()):
+                self.client._send_receive = AsyncMock(return_value=response)
+                with self.assertRaises(RuntimeError):
+                    await self.client.read_matrix_block(variable, 0, 0, 2, 3)
+
+    async def test_matrix_cancellation_releases_shared_lock_for_scalar_read(self):
+        variable = self.protocol.Variable("Matrix", 4001, 3, rows=1, cols=1)
+        sent = asyncio.Event()
+        self.transport.sendto.side_effect = lambda request: sent.set()
+        task = asyncio.create_task(self.client.read_matrix_element(variable, 0, 0))
+        await sent.wait()
+        scalar = asyncio.create_task(self.client.read_variable(self.variable))
+        await asyncio.sleep(0)
+        self.assertEqual(self.transport.sendto.call_count, 1)
+        self.transport.sendto.side_effect = lambda request: self.deliver(self.envelope(
+            long_frame(), self.tid(request),
+        ))
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertEqual(await scalar, 123)
+        self.assert_waiter_cleared()
+
+    async def test_matrix_rejects_unrelated_udp_reply_and_times_out_cleanly(self):
+        variable = self.protocol.Variable("Matrix", 4001, 3, rows=1, cols=1)
+        self.transport.sendto.side_effect = lambda request: self.deliver(self.envelope(
+            long_frame(function=0x83), self.tid(request),
+        ))
+        with self.assertRaises(TimeoutError):
+            await self.client.read_matrix_element(variable, 0, 0)
+        self.assert_waiter_cleared()
+
 
 if __name__ == "__main__":
     unittest.main()

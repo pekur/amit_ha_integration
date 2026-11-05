@@ -469,6 +469,64 @@ class AMiTClient:
         elif variable.var_type == VarType.FLOAT:
             return struct.unpack('<f', value_data[:4])[0]
     
+    async def read_matrix_element(self, variable: Variable, row: int, col: int) -> int | float:
+        """Read one matrix element. Row and column indexes start at zero."""
+        values = await self._read_matrix_values(variable, row, col, 1, 1, block=False)
+        return values[0]
+
+    async def read_matrix_block(
+        self, variable: Variable, row: int, col: int, rows: int, cols: int,
+    ) -> List[List[int | float]]:
+        """Read a rectangular window in row order using one request.
+
+        A window can contain at most 120 Integer or 60 Long/Float values.
+        Larger windows must be divided by the caller. Separate reads are not
+        an atomic snapshot of the entire matrix.
+        """
+        values = await self._read_matrix_values(variable, row, col, rows, cols, block=True)
+        return [list(values[start:start + cols]) for start in range(0, len(values), cols)]
+
+    async def _read_matrix_values(
+        self, variable: Variable, row: int, col: int, rows: int, cols: int, *, block: bool,
+    ) -> tuple[int | float, ...]:
+        """Validate a matrix window, send its read request, and decode values."""
+        formats = {
+            VarType.MATRIX_INT16: ('h', 2, 120, 0),
+            VarType.MATRIX_INT32: ('i', 4, 60, 1),
+            VarType.MATRIX_FLOAT: ('f', 4, 60, 2),
+        }
+        if variable.var_type not in formats:
+            raise ValueError("Variable is not a supported matrix type")
+        fmt, size, limit, type_code = formats[variable.var_type]
+        if (type(variable.wid) is not int or not 0 <= variable.wid <= 0xFFFF
+                or type(variable.rows) is not int or not 1 <= variable.rows <= 0xFFFF
+                or type(variable.cols) is not int or not 1 <= variable.cols <= 0xFFFF):
+            raise ValueError("Matrix requires a valid WID and known dimensions")
+        if (any(type(value) is not int for value in (row, col, rows, cols))
+                or row < 0 or col < 0 or rows < 1 or cols < 1
+                or row + rows > variable.rows or col + cols > variable.cols):
+            raise ValueError("Matrix window is outside its dimensions")
+        count = rows * cols
+        if count > limit:
+            raise ValueError(f"Matrix window exceeds {limit} values per request")
+
+        body = bytearray([
+            self.station_addr & 0x1F, self.client_addr & 0x1F, 0x4D, 0x01,
+            (0x20 if block else 0x10) + type_code,
+        ])
+        body.extend(struct.pack('<HHH', variable.wid, row, col))
+        if block:
+            body.extend(struct.pack('<HH', rows, cols))
+        frame = bytes([0x68, len(body), len(body), 0x68]) + body
+        frame += bytes([_calc_checksum(body), 0x16])
+        response = await self._send_receive(frame)
+        status, value_data = self._validate_response(response, 0x01)
+        if status not in (0x00, 0x08):
+            raise RuntimeError(f"PLC rejected matrix read: status {status}")
+        if len(value_data) != count * size:
+            raise RuntimeError("Invalid matrix response length")
+        return struct.unpack('<' + fmt * count, value_data)
+
     async def write_variable(self, variable: Variable, value: Any) -> bool:
         """Write a value to PLC variable."""
         if not variable.writable:
